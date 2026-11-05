@@ -1,0 +1,20 @@
+# 构建产物
+build_pc/
+build_e1ui/
+build_e1/
+hwtest/build/
+*.o
+*.d
+*.log
+
+# 第三方源码（LVGL 9.2.2，用 scripts/fetch-lvgl.sh 获取）
+hwtest/third_party/
+
+# 运行/测试数据（录音、演示文件、截图原始帧）
+demo/
+test/
+test2/
+shots/*.raw
+*.cmd
+*.wav
+*.csv

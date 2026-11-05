@@ -1,0 +1,21 @@
+# freE1 device build (aarch64 static, no UI yet)
+#   source ../cross/env.sh && make -f Makefile.e1 -j8
+CC       ?= aarch64-linux-gcc
+SRC      := src/util.c src/wav.c src/session.c src/audio_dev.c src/audio_sim.c src/rec.c src/wifi.c src/main.c
+OBJ      := $(patsubst src/%.c,build_e1/obj/%.o,$(SRC))
+CFLAGS   := -O2 -g -std=gnu11 -march=armv8-a -Isrc -DFREEL1_NO_UI \
+            -Wall -Wno-unused-parameter -Wno-sign-compare -MMD -MP
+LDFLAGS  := -static
+LDLIBS   := -lm
+TARGET   := build_e1/freE1
+
+all: $(TARGET)
+$(TARGET): $(OBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+build_e1/obj/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+clean:
+	rm -rf build_e1
+.PHONY: all clean
+-include $(OBJ:.o=.d)

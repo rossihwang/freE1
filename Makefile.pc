@@ -1,0 +1,38 @@
+# freE1 PC preview build (x86_64, X11 + headless PNG)
+#
+#   make -f Makefile.pc -j8          # -> build_pc/freE1
+#   make -f Makefile.pc lvglobj -j8  # LVGL only (faster iteration)
+
+CC       := gcc
+LVGL     := hwtest/third_party/lvgl
+SRC      := $(wildcard src/*.c) $(wildcard common/*.c)
+LVSRC    := $(shell find $(LVGL)/src -name '*.c')
+OBJ      := $(patsubst %.c,build_pc/obj/%.o,$(SRC))
+LVOBJ    := $(patsubst $(LVGL)/src/%.c,build_pc/lvgl/%.o,$(LVSRC))
+DEP      := $(OBJ:.o=.d) $(LVOBJ:.o=.d)
+
+CFLAGS   := -O2 -g -std=gnu11 -I. -Isrc -Icommon -Ipc -Ihwtest -I$(LVGL) -DLV_CONF_INCLUDE_SIMPLE \
+            -Wall -Wno-unused-parameter -Wno-sign-compare -MMD -MP
+LDLIBS   := -lX11 -lz -lm -lpthread
+TARGET   := build_pc/freE1
+
+all: $(TARGET)
+
+lvglobj: $(LVOBJ)
+
+$(TARGET): $(OBJ) $(LVOBJ)
+	$(CC) -o $@ $^ $(LDLIBS)
+
+build_pc/obj/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build_pc/lvgl/%.o: $(LVGL)/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -rf build_pc
+
+.PHONY: all lvglobj clean
+-include $(DEP)

@@ -1,0 +1,30 @@
+# freE1 device UI build (aarch64 static, LVGL fbdev + touch)
+#   source ../cross/env.sh && make -f Makefile.e1ui -j8
+CC      ?= aarch64-linux-gcc
+LVGL    := hwtest/third_party/lvgl
+SRC     := src/util.c src/wav.c src/session.c src/audio_dev.c src/audio_sim.c \
+           src/rec.c src/engine.c src/http.c src/wifi.c src/wifi_ui.c src/hal_disp_fb.c src/hal_input.c \
+           src/ui.c src/main.c common/hal_sysfs.c
+LVSRC   := $(shell find $(LVGL)/src -name '*.c')
+OBJ     := $(patsubst %.c,build_e1ui/obj/%.o,$(SRC))
+LVOBJ   := $(patsubst $(LVGL)/src/%.c,build_e1ui/lvgl/%.o,$(LVSRC))
+CFLAGS  := -O2 -g -std=gnu11 -march=armv8-a -Isrc -Icommon -Ihwtest -I$(LVGL) \
+           -DLV_CONF_INCLUDE_SIMPLE -DFREEL1_NO_PNG -DFREEL1_NO_X11 \
+           -Wall -Wno-unused-parameter -Wno-sign-compare -MMD -MP
+LDFLAGS := -static
+LDLIBS  := -lm -lpthread
+TARGET  := build_e1ui/freE1
+
+all: $(TARGET)
+$(TARGET): $(OBJ) $(LVOBJ)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+build_e1ui/obj/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+build_e1ui/lvgl/%.o: $(LVGL)/src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+clean:
+	rm -rf build_e1ui
+.PHONY: all clean
+-include $(OBJ:.o=.d) $(LVOBJ:.o=.d)
