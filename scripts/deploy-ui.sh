@@ -17,6 +17,22 @@ BIN="$(dirname "$0")/../build_e1ui/freE1"
 LAUNCH="$(dirname "$0")/../scripts/e1ui-launch.sh"
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$HOST")
 
+# WiFi 偶尔断一下就够毁掉一次部署：ssh 统一重试三次
+rssh(){
+	for _ in 1 2 3; do "${SSH[@]}" "$@" && return 0; sleep 2; done
+	return 1
+}
+
+# 无论怎么退出，都要把启动脚本放回去。否则设备会停在 stub（= 原厂 App）
+restore_launcher(){
+	if [ "${STUBBED:-0}" = 1 ]; then
+		rssh 'cat > /userdata/system/SogouE1.new' < "$LAUNCH" || true
+		rssh 'mv -f /userdata/system/SogouE1.new /userdata/system/SogouE1; chmod 755 /userdata/system/SogouE1' || true
+		echo "-- launcher restored on exit"
+	fi
+}
+trap restore_launcher EXIT
+
 KEEP_REC=0
 [ "${1:-}" = "--keep-recording" ] && KEEP_REC=1
 
@@ -35,35 +51,37 @@ fi
 if [ "$KEEP_REC" = 0 ]; then
 	"${SSH[@]}" 'for p in /proc/[0-9]*; do c=$(tr "\0" " " < $p/cmdline 2>/dev/null); case "$c" in arecord*"hw:2,0"*) kill -9 ${p#/proc/} 2>/dev/null;; esac; done'
 fi
-"${SSH[@]}" 'printf "#!/bin/sh\nexec /usr/bin/SogouE1\n" > /userdata/system/SogouE1; chmod 755 /userdata/system/SogouE1; killall -9 freE1 2>/dev/null; sleep 2; echo ok'
+STUBBED=1
+rssh 'printf "#!/bin/sh\nexec /usr/bin/SogouE1\n" > /userdata/system/SogouE1; chmod 755 /userdata/system/SogouE1; killall -9 freE1 2>/dev/null; sleep 2; echo ok'
 
 # 2. 传新二进制（设备没有 scp，用 ssh 的 stdin）
-"${SSH[@]}" 'cat > /userdata/freE1/freE1.new' < "$BIN"
-GOT=$("${SSH[@]}" 'md5sum /userdata/freE1/freE1.new' | cut -d' ' -f1)
+rssh 'cat > /userdata/freE1/freE1.new' < "$BIN"
+GOT=$(rssh 'md5sum /userdata/freE1/freE1.new' | cut -d' ' -f1)
 [ "$GOT" = "$LOCAL_SUM" ] || { echo "!! 传输 md5 不符: $GOT"; exit 3; }
 
 # 3. 就位 + 还原启动脚本 + 复位崩溃计数
-"${SSH[@]}" 'mv /userdata/freE1/freE1.new /userdata/freE1/freE1 && chmod 755 /userdata/freE1/freE1 && echo 0 > /userdata/freE1/cnt && md5sum /userdata/freE1/freE1' | grep -q "$LOCAL_SUM" \
+rssh 'mv -f /userdata/freE1/freE1.new /userdata/freE1/freE1 && chmod 755 /userdata/freE1/freE1 && echo 0 > /userdata/freE1/cnt && md5sum /userdata/freE1/freE1' | grep -q "$LOCAL_SUM" \
 	|| { echo "!! 就位后 md5 不符"; exit 4; }
-"${SSH[@]}" 'cat > /userdata/system/SogouE1.new' < "$LAUNCH"
-"${SSH[@]}" 'mv /userdata/system/SogouE1.new /userdata/system/SogouE1 && chmod 755 /userdata/system/SogouE1'
-"${SSH[@]}" 'md5sum /userdata/system/SogouE1' | grep -q "$WANT_SUM" || { echo "!! 启动脚本还原失败"; exit 5; }
+rssh 'cat > /userdata/system/SogouE1.new' < "$LAUNCH"
+rssh 'mv -f /userdata/system/SogouE1.new /userdata/system/SogouE1 && chmod 755 /userdata/system/SogouE1'
+rssh 'md5sum /userdata/system/SogouE1' | grep -q "$WANT_SUM" || { echo "!! 启动脚本还原失败"; exit 5; }
+STUBBED=0
 
 # 4. 触发重启：inittab 的 respawn 条目会重新拉起 SogouLunchProbe.sh → SogouE1
-"${SSH[@]}" 'killall -9 SogouE1 2>/dev/null; exit 0'
+rssh 'killall -9 SogouE1 2>/dev/null; exit 0'
 for i in $(seq 1 15); do
 	sleep 1
-	PID=$("${SSH[@]}" 'ps | grep "/userdata/freE1/freE1" | grep -v grep' || true)
+	PID=$(rssh 'ps | grep "/userdata/freE1/freE1" | grep -v grep' || true)
 	[ -n "$PID" ] && break
 done
 if [ -z "${PID:-}" ]; then
 	# respawn 没生效（比如本次开机这条路已经走完），手动拉起
-	"${SSH[@]}" 'setsid /userdata/system/SogouE1 >/dev/null 2>&1 & sleep 1; echo launched'
+	rssh 'setsid /userdata/system/SogouE1 >/dev/null 2>&1 & sleep 1; echo launched'
 	sleep 3
 fi
-PID=$("${SSH[@]}" 'ps | grep "/userdata/freE1/freE1" | grep -v grep' || true)
+PID=$(rssh 'ps | grep "/userdata/freE1/freE1" | grep -v grep' || true)
 [ -n "$PID" ] || { echo "!! UI 没起来，看 /mnt/sdcard/freE1/boot.log"; exit 6; }
 
 echo "== device  $PID"
-"${SSH[@]}" 'tail -6 /mnt/sdcard/freE1/boot.log'
+rssh 'tail -6 /mnt/sdcard/freE1/boot.log'
 echo "== done"
