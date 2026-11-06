@@ -668,12 +668,9 @@ static void build_record_page(lv_obj_t *p){
     lv_obj_add_event_cb(viz_top,reset_cb,LV_EVENT_CLICKED,NULL);
     {
         /* L/R 两条横向电平左右并排（录音键在其下方） */
+        /* 定向模式下两颗麦朝向相同，标 L/R 反而误导，不放标签 */
         bars_top[0]=mk_meter(viz_top,8,8,148,30)->bar;
         bars_top[1]=mk_meter(viz_top,164,8,148,30)->bar;
-        lv_obj_t *ll=mk_label(viz_top,"L",&lv_font_montserrat_14,C_DIM);
-        lv_obj_set_pos(ll,78,44);
-        lv_obj_t *rr=mk_label(viz_top,"R",&lv_font_montserrat_14,C_DIM);
-        lv_obj_set_pos(rr,234,44);
     }
 
     rec_btn = lv_button_create(p);
