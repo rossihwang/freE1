@@ -73,6 +73,7 @@ static pid_t   g_geo_pid = -1;
 static int     g_geo_on;
 static int64_t g_geo_t0;
 static int64_t g_geo_stop_arm;   /* 非 0 = 已经按过一次停止，等第二次确认 */
+static int g_paused;             /* 录音暂停镜像（engine 侧 st->paused 的副本） */
 
 static lv_obj_t *mk_panel(lv_obj_t *parent,int x,int y,int w,int h,int r,uint32_t bg);
 static lv_obj_t *mk_hbar(lv_obj_t *parent,int x,int y,int w,int h);
@@ -387,10 +388,16 @@ static void show_page(int p){
 static void set_rec_ui(int on){
     if(recording != on){ led_set(on); motor_pulse(); }
     recording = on;
-    lv_label_set_text(rec_lbl, on ? "STOP" : "REC");
-    lv_obj_set_style_bg_color(rec_btn, lv_color_hex(on?C_RED:C_GREEN), 0);
-    lv_label_set_text(state_lbl, on ? "RECORDING" : "STANDBY");
-    lv_obj_set_style_text_color(state_lbl, lv_color_hex(on?C_RED:C_DIM), 0);
+    if(!on) g_paused = 0;
+    /* 大按钮三态：待机 REC / 录音 PAUSE / 暂停 RESUME（停止交给 STOP 键或长按） */
+    const char *bl = !on ? "REC" : (g_paused ? "RESUME" : "PAUSE");
+    uint32_t bc = !on ? C_GREEN : (g_paused ? 0xFFC400 : C_RED);
+    /* RESUME 比 PAUSE 宽，20 号字会顶出圆形按钮，暂停态降一号 */
+    lv_obj_set_style_text_font(rec_lbl, g_paused ? &lv_font_montserrat_14 : &lv_font_montserrat_20, 0);
+    lv_label_set_text(rec_lbl, bl);
+    lv_obj_set_style_bg_color(rec_btn, lv_color_hex(bc), 0);
+    lv_label_set_text(state_lbl, !on ? "STANDBY" : (g_paused ? "PAUSED" : "RECORDING"));
+    lv_obj_set_style_text_color(state_lbl, lv_color_hex(!on ? C_DIM : (g_paused ? 0xFFC400 : C_RED)), 0);
     if(!on){
         /* 停止后必须清掉上次录音的计时/电平/波形，否则屏幕看着像还在录 */
         rec_sec = 0;
@@ -544,7 +551,27 @@ static void toggle_record(void){
                lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0); }
     }
 }
-static void rec_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); toggle_record(); }
+/* REC / PAUSE：未录音则开始；录音中则暂停；暂停中则继续。停止不走这里。 */
+static void rec_pause_cycle(void){
+    if(g_geo_on){ toggle_record(); return; }        /* 原始采集：按两次停止 */
+    if(!engine_running()){ toggle_record(); return; }
+    g_paused = !g_paused;
+    engine_pause(g_paused);
+    set_rec_ui(1);
+    logmsg("ui: record %s", g_paused ? "paused" : "resumed");
+}
+/* STOP：录音/暂停中则停止；否则停回放 */
+static void rec_stop_all(void){
+    if(g_geo_on){ toggle_record(); return; }
+    if(engine_running()){
+        engine_stop(); g_paused = 0; set_rec_ui(0);
+        logmsg("recorder stopped by key");
+        return;
+    }
+    if(play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped by key"); }
+}
+static void rec_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); rec_pause_cycle(); }
+static void rec_long_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); rec_stop_all(); }
 
 static void mode_cb(lv_event_t *e){
     (void)e;
@@ -653,6 +680,7 @@ static void build_record_page(lv_obj_t *p){
     rec_lbl = mk_label(rec_btn,"REC",&lv_font_montserrat_20,0x05060A);
     lv_obj_center(rec_lbl);
     lv_obj_add_event_cb(rec_btn,rec_cb,LV_EVENT_CLICKED,NULL);
+    lv_obj_add_event_cb(rec_btn,rec_long_cb,LV_EVENT_LONG_PRESSED,NULL);   /* 长按 = 停止 */
 
     chart = lv_chart_create(p);
     lv_obj_set_size(chart,300,40);
@@ -838,6 +866,7 @@ static void geo_start(int secs){
     if(p > 0){
         g_geo_pid = p; g_geo_t0 = mono_ms(); g_geo_on = 1; g_geo_stop_arm = 0;
         set_rec_ui(1);
+        lv_label_set_text(rec_lbl, "STOP");        /* 采集期间单击是"待确认停止" */
         lv_label_set_text(state_lbl, "RAW 8CH");
         lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0);
         if(chart) lv_obj_add_flag(chart, LV_OBJ_FLAG_HIDDEN);
@@ -1008,6 +1037,8 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrolls ",8)){ if(settings_box) lv_obj_scroll_by(settings_box,0,-atoi(b+8),LV_ANIM_OFF); }
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
+    else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
+    else if(!strncmp(b,"stopkey",7)) rec_stop_all();      /* 等同 STOP 键 */
     else if(!strncmp(b,"geostop",7)){ if(g_geo_on) geo_stop(); set_rec_ui(0); }
     else if(!strncmp(b,"geo",3)){
         if(g_geo_on){ geo_stop(); set_rec_ui(0); }
@@ -1093,6 +1124,7 @@ static void ui_tick(lv_timer_t *t){
         if(!engine_running()){ ui_activity(); g_off_at = 0; if(g_monitor_on){ g_monitor_on=0; monitor_close(); monitor_refresh(); } }   /* 停录后重新计时，别立刻睡 */
     }
     rec_status *st = engine_status();
+    if(st && st->running && st->paused != g_paused){ g_paused = st->paused; set_rec_ui(1); }
     { static int64_t last=0; int64_t now=mono_ms();
       if(now-last>1000){
           /* 顶栏：电量 / 剩余空间 / 耳机 */
@@ -1198,7 +1230,7 @@ static void ui_tick(lv_timer_t *t){
         char b2[24]; snprintf(b2,sizeof b2,"%d dBFS", st->db_dbfs);
         lv_label_set_text(dbfs_lbl,b2);
         double tt2=(double)(lv_tick_get())/1000.0;
-        if(st->db_dbfs>-70){
+        if(st->db_dbfs>-70 && !g_paused){
             lv_chart_set_next_value(chart,ser1,st->db_dbfs);
             lv_chart_set_next_value(chart,ser2,st->db_dbfs-6-3*sin(tt2*3.1));
         }
@@ -1596,9 +1628,9 @@ void ui_on_hw_key(int code, int pressed){
     g_idle_handled = 0;
     if(!g_screen_on){ screen_set(1); return; }   /* 灭屏时任何键先唤醒 */
     switch(code){
-    case 2:  if(g_depth>0) ui_pop_page(); else show_page((page_idx+2)%NPAGES); break;  /* MARK */
-    case 3:  show_page((page_idx+1)%NPAGES); break;          /* KEY_2 STOP  -> 下一页 */
-    case 4:  toggle_record(); break;   /* KEY_3 REC：与屏幕按钮同一条路径（含原始 8 通道采集的停止） */
+    case 2:  logmsg("key: MARK (no action yet)"); break;   /* KEY_1 MARK：不做换页，书签功能待做 */
+    case 3:  rec_stop_all(); break;                         /* KEY_2 STOP：停止录音/暂停，无录音则停回放 */
+    case 4:  rec_pause_cycle(); break;                      /* KEY_3 REC/PAUSE：录 → 暂停 → 继续 */
     case 7:  /* KEY_6 POWER：短按亮灭屏，长按 2 s 确认关机 */
         break;
     default: break;
