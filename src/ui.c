@@ -671,9 +671,10 @@ static void build_record_page(lv_obj_t *p){
     lv_obj_add_event_cb(viz_top,reset_cb,LV_EVENT_CLICKED,NULL);
     {
         /* L/R 两条横向电平左右并排（录音键在其下方） */
-        /* 定向模式下两颗麦朝向相同，标 L/R 反而误导，不放标签 */
-        bars_top[0]=mk_meter(viz_top,8,8,148,30)->bar;
-        bars_top[1]=mk_meter(viz_top,164,8,148,30)->bar;
+        /* 定向模式下两颗麦朝向相同，标 L/R 反而误导，不放标签。
+           纵向居中于"模式胶囊下沿(89) 到 REC 按钮上沿(150)"之间 */
+        bars_top[0]=mk_meter(viz_top,8,20,148,30)->bar;
+        bars_top[1]=mk_meter(viz_top,164,20,148,30)->bar;
     }
 
     rec_btn = lv_button_create(p);
