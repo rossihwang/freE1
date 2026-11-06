@@ -45,7 +45,10 @@ static void flush_cb(lv_display_t *d, const lv_area_t *a, uint8_t *px){
     { static long acc=0, area=0; static int n=0; static int64_t last=0;
       acc+=us; area+=(long)w*h; n++;
       if(n>=30){
-          int64_t now=mono_ms(); long gap = last? (long)(now-last)/30 : 0; last=now;
+          int64_t now=mono_ms();
+          /* 睡眠/让出显示后 last 会是很久以前的值，直接算会得出"frame gap 6159 ms"这种假数据 */
+          long gap = (last && now-last < 60000) ? (long)(now-last)/30 : 0;
+          last=now;
           logmsg("fb: flush avg %ld us, area avg %ld px, frame gap %ld ms", acc/n, area/n, gap);
           acc=0; area=0; n=0;
       } }
