@@ -67,6 +67,10 @@ static lv_obj_t *batt_lbl, *stor_lbl, *files_hdr, *clock_lbl;
 static lv_obj_t *viz_omni, *viz_top;
 static lv_obj_t *bars[6];
 static lv_obj_t *bars_top[2];
+/* 8 通道原始采集状态（麦克风阵列几何测量），见 geo_start() */
+static pid_t   g_geo_pid = -1;
+static int     g_geo_on;
+static int64_t g_geo_t0;
 
 static lv_obj_t *mk_panel(lv_obj_t *parent,int x,int y,int w,int h,int r,uint32_t bg);
 static lv_obj_t *mk_hbar(lv_obj_t *parent,int x,int y,int w,int h);
@@ -414,6 +418,7 @@ static void ui_activity(void){ g_last_activity = mono_ms(); g_off_at = 0; g_idle
    进入前必须：停录音、sync、记录时间 */
 static void do_suspend(void){
     if(engine_running()) return;                 /* 录音中绝不睡 */
+    if(g_geo_on) return;                         /* 原始采集进行中也不睡 */
     if(g_depth>0) return;                        /* 子页里不睡 */
     logmsg("suspend: going to sleep");
     hs_motor(false);          /* 别带着振动状态睡过去 */
@@ -506,7 +511,9 @@ static void monitor_btn_cb(lv_event_t *e){
     monitor_toggle();
 }
 
+static void geo_stop(void);
 static void toggle_record(void){
+    if(g_geo_on){ geo_stop(); set_rec_ui(0); return; }   /* 原始 8 通道采集：STOP 就停它 */
     if(!engine_running() && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (record start)"); }
     if(engine_running()){
         engine_stop();
@@ -772,12 +779,67 @@ static void ui_open_wifi(void){
     ui_push_page(p);
     wifi_page_on_show();
 }
+/* 8 通道原始采集（麦克风阵列几何/时延测量用）。
+   录音引擎只落 2 通道，量阵列必须拿原始 8 通道，所以这里单独起 arecord；
+   但状态完全走 UI：屏幕显示 RAW 8CH + 计时，STOP 可停，采集期间不熄屏不休眠。
+   不在 tick 里画电平/波形——arecord 的数据不经过进程内，画不了真值，
+   宁可什么都不画，也不要用模拟曲线冒充。 */
+static void geo_start(int secs);
+static void geo_stop(void){
+    if(g_geo_pid > 0){
+        kill(g_geo_pid, SIGINT);              /* arecord 收到 SIGINT 会回写 WAV 头 */
+        int reaped = 0;
+        for(int i=0;i<20 && !reaped;i++){
+            if(waitpid(g_geo_pid, NULL, WNOHANG) == g_geo_pid) reaped = 1;
+            else usleep(50000);
+        }
+        if(!reaped){ kill(g_geo_pid, SIGKILL); waitpid(g_geo_pid, NULL, 0); }
+        g_geo_pid = -1;
+    }
+    g_geo_on = 0;
+    logmsg("geo: stopped");
+}
+static void geo_start(int secs){
+    if(g_geo_on || engine_running()) return;
+    mkdir("/mnt/sdcard/geo", 0777);
+    char secbuf[12]; snprintf(secbuf, sizeof secbuf, "%d", secs);
+    sync();
+    pid_t p = fork();
+    if(p == 0){
+        setsid();                              /* 脱离 UI 的进程组，UI 挂了也不带走采集 */
+        int fd = open("/dev/null", O_WRONLY);
+        if(fd >= 0){ dup2(fd, 1); dup2(fd, 2); }
+        execl("/usr/bin/arecord", "arecord", "-D", "hw:2,0", "-c", "8", "-r", "48000",
+              "-f", "S32_LE", "-d", secbuf, "/mnt/sdcard/geo/geo.wav", (char*)NULL);
+        _exit(127);
+    }
+    if(p > 0){
+        g_geo_pid = p; g_geo_t0 = mono_ms(); g_geo_on = 1;
+        set_rec_ui(1);
+        lv_label_set_text(state_lbl, "RAW 8CH");
+        lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0);
+        if(chart) lv_obj_add_flag(chart, LV_OBJ_FLAG_HIDDEN);
+        rec_sec = 0;
+        ui_activity();
+        logmsg("geo: started pid %d, %d s -> /mnt/sdcard/geo/geo.wav", (int)p, secs);
+    } else {
+        lv_label_set_text(state_lbl, "NO AUDIO");
+        lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0);
+        logmsg("geo: fork failed");
+    }
+}
+
 /* 硬件测试：复用独立模块 e1hwtest（6 页全套）。
    不 exec（否则退出要走重启流程、还会闪回原厂画面），改为：让出显示 → 子进程跑 → 收回并重绘。 */
 static pid_t g_hw_pid = -1;
 static int   g_hw_return_page = -1;
 static void hwtest_start(void){
     if(g_hw_pid > 0) return;
+    if(g_geo_on){                                  /* 原始 8 通道采集在跑，别抢 PDM */
+        show_warn("Stop raw capture before hardware test.");
+        logmsg("hwtest: refused (raw 8ch capture)");
+        return;
+    }
     if(engine_running()){                          /* 录音中禁止进硬件测试（会抢 PDM/codec） */
         show_warn("Stop recording before hardware test.");
         logmsg("hwtest: refused (recording)");
@@ -921,6 +983,11 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrolls ",8)){ if(settings_box) lv_obj_scroll_by(settings_box,0,-atoi(b+8),LV_ANIM_OFF); }
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
+    else if(!strncmp(b,"geostop",7)){ if(g_geo_on) geo_stop(); set_rec_ui(0); }
+    else if(!strncmp(b,"geo",3)){
+        if(g_geo_on){ geo_stop(); set_rec_ui(0); }
+        else geo_start(atoi(b+3) > 0 ? atoi(b+3) : 900);   /* "geo 120" 可选秒数 */
+    }
     else if(!strncmp(b,"power",5)) show_power_dialog();
     else if(!strncmp(b,"closep",6)) power_dlg_close();
     logmsg("cmd: %s", b);
@@ -975,7 +1042,22 @@ static void ui_tick(lv_timer_t *t){
     play_state_t ps;
     play_get_state(&ps);
     transport_update(&ps);
-    if(!g_shots && recording != engine_running()){
+    if(g_geo_on){
+        /* 8 通道原始采集：数据不经过本进程，只能显示计时，别画假的电平/波形 */
+        if(g_geo_pid > 0 && waitpid(g_geo_pid, NULL, WNOHANG) == g_geo_pid){
+            g_geo_pid = -1; g_geo_on = 0;
+            logmsg("geo: capture finished (arecord exited)");
+            set_rec_ui(0);
+        } else {
+            uint32_t s = (uint32_t)((mono_ms() - g_geo_t0) / 1000);
+            char buf[16];
+            snprintf(buf, sizeof buf, "%02u:%02u:%02u", s/3600, (s/60)%60, s%60);
+            if(timer_lbl) lv_label_set_text(timer_lbl, buf);
+            rec_sec = s;
+            ui_activity();                 /* 采集期间保持亮屏、不进休眠 */
+        }
+    }
+    if(!g_geo_on && !g_shots && recording != engine_running()){
         set_rec_ui(engine_running());
         if(!engine_running()){ ui_activity(); g_off_at = 0; if(g_monitor_on){ g_monitor_on=0; monitor_close(); monitor_refresh(); } }   /* 停录后重新计时，别立刻睡 */
     }
@@ -1093,8 +1175,9 @@ static void ui_tick(lv_timer_t *t){
     }
     double tt = (double)(lv_tick_get())/1000.0;
     double base = 0.35 + 0.30*(0.5+0.5*sin(tt*1.7));
-    if(!recording){
+    if(!recording || g_geo_on){
         /* 待机时不留任何电平读数：上次的 -72 dBFS 看着仍像在采 */
+        /* 原始 8 通道采集同理：进程内没有数据，不画模拟曲线 */
         for(int i=0;i<8;i++) meter_update(&meters[i],0);
         lv_label_set_text(dbfs_lbl,"-- dBFS");
         return;
