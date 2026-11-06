@@ -109,6 +109,31 @@ int hs_backlight_get(void) { return rd_int("/sys/class/backlight/backlight/brigh
 /* ---------------- 耳机 ---------------- */
 int hs_hp_inserted(void) { return rd_int("/proc/headset_inserted"); }
 
+/* 耳机/扬声器路由。必须反复施加：驱动在耳机拔出时会把 DAC HPOUT 拉到 0
+   (-inf dB)，插回来不会自己恢复，于是"插着耳机却没声音"。 */
+void hs_audio_route(int hp)
+{
+    char cmd[512];
+    if(hp == 1){
+        /* 耳机：HPOUT 打开到 80%，扬声器(LINEOUT)关掉 */
+        snprintf(cmd, sizeof cmd,
+            "amixer -c 0 sset 'DAC HPOUT Left' 24 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC HPOUT Right' 24 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC HPMIX Left' 1 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC HPMIX Right' 1 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC LINEOUT Left' 0 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC LINEOUT Right' 0 >/dev/null 2>&1");
+    } else {
+        snprintf(cmd, sizeof cmd,
+            "amixer -c 0 sset 'DAC HPOUT Left' 0 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC HPOUT Right' 0 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC LINEOUT Left' 1 >/dev/null 2>&1; "
+            "amixer -c 0 sset 'DAC LINEOUT Right' 1 >/dev/null 2>&1");
+    }
+    (void)system(cmd);
+    logmsg("audio route -> %s", hp == 1 ? "headphone" : "speaker");
+}
+
 /* ---------------- 电池 ---------------- */
 int hs_battery_capacity(void)    { return rd_int("/sys/class/power_supply/battery/capacity"); }
 int hs_battery_voltage_uv(void)  { return rd_int("/sys/class/power_supply/battery/voltage_now"); }

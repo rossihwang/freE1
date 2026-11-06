@@ -30,6 +30,7 @@ int  hs_backlight_get(void);
 
 /* ---- 耳机：/proc/headset_inserted（原厂 App 维护，替换后可能不可信） ---- */
 int  hs_hp_inserted(void);
+void hs_audio_route(int hp);   /* 施加耳机/扬声器路由（驱动会把 HPOUT 静音，需要反复保证） */
 
 /* ---- 电池 ---- */
 int  hs_battery_capacity(void);

@@ -495,6 +495,11 @@ static void monitor_toggle(void){
             logmsg("monitor: refused (no headphone)");
             return;
         }
+        if(!engine_running()){
+            show_warn("Start recording to use monitor.");
+            logmsg("monitor: refused (not recording)");
+            return;
+        }
         if(monitor_open(FMT_RATE[g_fmt]) != 0){ show_warn("Monitor failed to open audio."); return; }
         g_monitor_on = 1;
         logmsg("monitor: on");
@@ -509,9 +514,9 @@ static void monitor_toggle(void){
 static void monitor_refresh(void){
     if(!monitor_lbl) return;
     int hp = hs_hp_inserted();
-    if(hp != 1){ lv_label_set_text(monitor_lbl, "MON HP"); lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(C_DIM), 0); }
-    else if(g_monitor_on){ lv_label_set_text(monitor_lbl, "MON ON"); lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(C_GREEN), 0); }
-    else { lv_label_set_text(monitor_lbl, "MON"); lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(C_DIM), 0); }
+    /* 颜色只表示"能不能监听"：插了耳机=绿，没插=灰；文字表示监听开没开 */
+    lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(hp == 1 ? C_GREEN : C_DIM), 0);
+    lv_label_set_text(monitor_lbl, g_monitor_on ? "MON ON" : "MON");
 }
 
 static void monitor_btn_cb(lv_event_t *e){
@@ -1133,6 +1138,21 @@ static void ui_tick(lv_timer_t *t){
           /* 顶栏：电量 / 剩余空间 / 耳机 */
           int cap = hs_battery_capacity();
           int hp  = hs_hp_inserted();
+          /* 驱动在耳机拔出时把 DAC HPOUT 静音且不会恢复，插拔时必须重新施加路由；
+             另外每 30 s 再压一次，防止别的路径又把它关掉 */
+          {
+              static int hp_prev = -1, hp_n = 0;
+              if(hp != hp_prev){
+                  hp_prev = hp;
+                  hs_audio_route(hp);
+                  monitor_refresh();
+                  if(hp != 1 && g_monitor_on){
+                      g_monitor_on = 0; monitor_close(); monitor_refresh();
+                      logmsg("monitor: off (headphone removed)");
+                  }
+                  logmsg("headphone: %s", hp == 1 ? "inserted" : "removed");
+              } else if(++hp_n >= 30){ hp_n = 0; hs_audio_route(hp); }
+          }
           int charging = hs_battery_charging();
           if(batt_lbl){
               if(cap<0) lv_label_set_text(batt_lbl,"--");
@@ -1713,6 +1733,7 @@ int ui_run_device(const char *dir, int http_port){
     fmt_load();
     guard_load();
     hs_motor(false);   /* 清掉上次可能卡住的振动 */
+    hs_audio_route(hs_hp_inserted());   /* 耳机/扬声器路由（驱动可能把 HPOUT 留在 0） */
     lv_init();
     lv_tick_set_cb(dev_tick_cb);
     lv_display_t *d = hal_disp_fb_init();
