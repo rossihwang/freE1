@@ -10,7 +10,7 @@ someone at the device).
 
 | Item | Status | Notes |
 |---|---|---|
-| Monitor path (record → headphone) | idea | Full-duplex already validated on this hardware (0 xrun, 10–20 ms latency). Needs a headphone listening check. |
+| Monitor path (record → headphone) | **implemented, pending listening check** | Src/audio path done; 10 s recording with monitor showed 0 underruns / 0 drops. Needs a headphone listening check tonight. |
 | VAD (voice-activated recording) | idea | Threshold tuning needs a real room. |
 | Gain presets (meeting / interview / music) | idea | AGC is currently a single fixed profile. |
 | Manual gain + AGC on/off | idea | Expose the AGC parameters that are already in `rec.c`. |

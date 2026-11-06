@@ -19,6 +19,7 @@
 #include "http.h"
 #include "wifi_ui.h"
 #include "audio_play.h"
+#include "monitor.h"
 #include "wifi.h"
 #include "hal_sysfs.h"
 #include <sys/ioctl.h>
@@ -118,6 +119,8 @@ static char g_dir[400] = "recordings";
 static int  g_device = 0;
 static lv_obj_t *files_box;
 static lv_obj_t *settings_box;
+static int g_monitor_on = 0;
+static lv_obj_t *monitor_btn = NULL, *monitor_lbl = NULL;
 static lv_obj_t *storage_val, *http_val, *perf_val, *fmt_val, *adb_val;
 static int g_adb_on = -1;
 
@@ -449,6 +452,42 @@ static void led_set(int on){
 }
 static void motor_pulse(void){ hs_motor_pattern(0); }
 
+static void monitor_refresh(void);
+
+static void monitor_toggle(void){
+    int hp = hs_hp_inserted();
+    if(!g_monitor_on){
+        if(hp != 1){
+            show_warn("Plug in headphones to use monitor.");
+            logmsg("monitor: refused (no headphone)");
+            return;
+        }
+        if(monitor_open(FMT_RATE[g_fmt]) != 0){ show_warn("Monitor failed to open audio."); return; }
+        g_monitor_on = 1;
+        logmsg("monitor: on");
+    } else {
+        g_monitor_on = 0;
+        monitor_close();
+        logmsg("monitor: off");
+    }
+    monitor_refresh();
+}
+
+static void monitor_refresh(void){
+    if(!monitor_lbl) return;
+    int hp = hs_hp_inserted();
+    if(hp != 1){ lv_label_set_text(monitor_lbl, "MON HP"); lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(C_DIM), 0); }
+    else if(g_monitor_on){ lv_label_set_text(monitor_lbl, "MON ON"); lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(C_GREEN), 0); }
+    else { lv_label_set_text(monitor_lbl, "MON"); lv_obj_set_style_text_color(monitor_lbl, lv_color_hex(C_DIM), 0); }
+}
+
+static void monitor_btn_cb(lv_event_t *e){
+    (void)e;
+    if(!tap_ok()) return;
+    ui_activity();
+    monitor_toggle();
+}
+
 static void toggle_record(void){
     if(!engine_running() && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (record start)"); }
     if(engine_running()){
@@ -509,8 +548,8 @@ static void build_record_page(lv_obj_t *p){
     lv_obj_align(timer_lbl,LV_ALIGN_TOP_MID,0,28);
 
     lv_obj_t *mb = lv_button_create(p);
-    lv_obj_set_size(mb,170,32);
-    lv_obj_align(mb,LV_ALIGN_TOP_MID,0,56);
+    lv_obj_set_size(mb,150,32);
+    lv_obj_align(mb,LV_ALIGN_TOP_MID,-40,56);
     lv_obj_set_style_radius(mb,12,0);
     lv_obj_set_style_bg_color(mb,lv_color_hex(C_PANEL),0);
     lv_obj_set_style_shadow_width(mb,0,0);
@@ -519,6 +558,20 @@ static void build_record_page(lv_obj_t *p){
     mode_lbl = mk_label(mb,"DIRECTIONAL",&lv_font_montserrat_14,C_GREEN);
     lv_obj_center(mode_lbl);
     lv_obj_add_event_cb(mb,mode_cb,LV_EVENT_CLICKED,NULL);
+
+    /* 监听开关（仅插耳机可用）：模式 chip 右侧 */
+    monitor_btn = lv_button_create(p);
+    lv_obj_set_size(monitor_btn,64,32);
+    lv_obj_align(monitor_btn,LV_ALIGN_TOP_MID,127,56);
+    lv_obj_set_style_radius(monitor_btn,12,0);
+    lv_obj_set_style_bg_color(monitor_btn,lv_color_hex(C_PANEL),0);
+    lv_obj_set_style_shadow_width(monitor_btn,0,0);
+    lv_obj_set_style_border_width(monitor_btn,1,0);
+    lv_obj_set_style_border_color(monitor_btn,lv_color_hex(C_LINE),0);
+    monitor_lbl = mk_label(monitor_btn,"MON",&lv_font_montserrat_14,C_DIM);
+    lv_obj_center(monitor_lbl);
+    lv_obj_add_event_cb(monitor_btn,monitor_btn_cb,LV_EVENT_CLICKED,NULL);
+    monitor_refresh();
 
     /* ---- 可视化容器（两种拾音各一套）---- */
     viz_omni = mk_panel(p,0,84,W,112,0,C_BG);
@@ -816,6 +869,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"play ",5)){ play_stop(); play_file(b+5); }
     else if(!strncmp(b,"pstop",5)){ play_stop(); logmsg("play: stopped (cmd)"); }
     else if(!strncmp(b,"hwt",3)){ hwtest_start(); }
+    else if(!strncmp(b,"mon",3)){ monitor_toggle(); logmsg("state: monitor=%d underruns=%d drops=%d", g_monitor_on, monitor_underruns(), monitor_drops()); }
     else if(!strncmp(b,"ppause",6)){ play_toggle_pause(); logmsg("play: toggle pause (cmd)"); }
     else if(!strncmp(b,"pseek ",6)){ play_seek_ms(atoll(b+6)); logmsg("play: seek %s ms (cmd)", b+6); }
     else if(!strncmp(b,"httpoff",7)){ logmsg("test: http_stop begin"); http_stop(); logmsg("test: http_stop done"); }
@@ -904,7 +958,7 @@ static void ui_tick(lv_timer_t *t){
     transport_update(&ps);
     if(!g_shots && recording != engine_running()){
         set_rec_ui(engine_running());
-        if(!engine_running()){ ui_activity(); g_off_at = 0; }   /* 停录后重新计时，别立刻睡 */
+        if(!engine_running()){ ui_activity(); g_off_at = 0; if(g_monitor_on){ g_monitor_on=0; monitor_close(); monitor_refresh(); } }   /* 停录后重新计时，别立刻睡 */
     }
     rec_status *st = engine_status();
     { static int64_t last=0; int64_t now=mono_ms();
@@ -941,6 +995,7 @@ static void ui_tick(lv_timer_t *t){
           } else if(cap > 25) {
               g_batt_level_shown = 0;   /* 充电回升后重置 */
           }
+          monitor_refresh();
           if(files_hdr) lv_label_set_text(files_hdr, engine_running()?"REC":"");
           { static int n=0; if(++n % 5 == 0){ int a = adb_running(); if(a != g_adb_on){ g_adb_on = a; adb_set_value(a); } } }
           if(http_val && g_http_port){

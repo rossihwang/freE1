@@ -3,6 +3,7 @@
 #include "session.h"
 #include "audio.h"
 #include "common.h"
+#include "monitor.h"
 #include <math.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -162,9 +163,18 @@ int rec_run(rec_cfg *cfg){
                     mixbuf[2*i+1] = (f[4]+f[3]+f[1])/3;
                 }
                 agc_process(mixbuf, got, 2, mix_map, &proc);
+                if(monitor_is_open()) monitor_write(mixbuf, (uint32_t)got);
                 if(wav_append(&w,mixbuf,got,2,mix_map)!=0) break;
             } else {
                 agc_process(inbuf, got, cfg->nch_in, map, &proc);
+                if(monitor_is_open()){
+                    int mm[2] = {0,1};
+                    for(int i2=0;i2<got;i2++){
+                        mixbuf[2*i2]   = inbuf[(size_t)i2*cfg->nch_in + map[0]];
+                        mixbuf[2*i2+1] = inbuf[(size_t)i2*cfg->nch_in + map[1]];
+                    }
+                    monitor_write(mixbuf, (uint32_t)got);
+                }
                 if(wav_append(&w,inbuf,got,cfg->nch_in,map)!=0) break;
             }
             total_frames+=got; s.frames+=got;
