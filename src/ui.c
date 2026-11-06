@@ -115,7 +115,9 @@ static void meters_reset(void){
         if(meters[i].mark) lv_obj_add_flag(meters[i].mark,LV_OBJ_FLAG_HIDDEN);
     }
 }
-static int tap_ok(void){ return !hal_input_last_drag(); }
+static int64_t g_ignore_tap_until = 0;   /* 弹层刚关：这段时间内的点击一律忽略 */
+static int tap_ok(void){ return !hal_input_last_drag() && mono_ms() > g_ignore_tap_until; }
+static void tap_guard(void){ g_ignore_tap_until = mono_ms() + 400; }
 static void reset_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); meters_reset(); }
 
 static lv_obj_t *chart, *ser1, *ser2;
@@ -1393,7 +1395,7 @@ int ui_run_shots(const char *dir, const char *outdir){
 static lv_obj_t *del_dlg = NULL;
 static char g_del_name[192];
 static lv_obj_t *warn_dlg = NULL;
-static void warn_close_cb(lv_event_t *e){ (void)e; if(warn_dlg){ lv_obj_delete(warn_dlg); warn_dlg=NULL; } }
+static void warn_close_cb(lv_event_t *e){ (void)e; if(warn_dlg){ lv_obj_delete(warn_dlg); warn_dlg=NULL; } tap_guard(); }
 static void show_warn(const char *msg){
     logmsg("warn: %s (dialog=%p)", msg, (void*)warn_dlg);
     if(warn_dlg) return;
@@ -1418,8 +1420,8 @@ static void show_warn(const char *msg){
 }
 
 static lv_obj_t *power_dlg = NULL;
-static void power_dlg_close(void){ if(power_dlg){ lv_obj_delete(power_dlg); power_dlg=NULL; } }
-static void del_dlg_close(void){ if(del_dlg){ lv_obj_delete(del_dlg); del_dlg=NULL; } }
+static void power_dlg_close(void){ if(power_dlg){ lv_obj_delete(power_dlg); power_dlg=NULL; } tap_guard(); }
+static void del_dlg_close(void){ if(del_dlg){ lv_obj_delete(del_dlg); del_dlg=NULL; } tap_guard(); }
 static void del_ok_cb(lv_event_t *e){
     (void)e;
     char path[600]; snprintf(path,sizeof path,"%s/%s",g_dir,g_del_name);
@@ -1456,7 +1458,7 @@ static void play_file(const char *name){
 
 static void play_row_cb(lv_event_t *e){
     const char *n = (const char*)lv_event_get_user_data(e);
-    if(hal_input_last_drag()) return;   /* 手指是滑动的，不当成点击 */
+    if(!tap_ok()) return;               /* 滑动 / 弹层刚关的余波都不算点击 */
     if(engine_running()){
         show_warn("Stop recording before playing a file.");
         logmsg("play: refused (recording)");
