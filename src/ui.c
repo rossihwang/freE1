@@ -385,6 +385,24 @@ static void set_rec_ui(int on){
     lv_obj_set_style_bg_color(rec_btn, lv_color_hex(on?C_RED:C_GREEN), 0);
     lv_label_set_text(state_lbl, on ? "RECORDING" : "STANDBY");
     lv_obj_set_style_text_color(state_lbl, lv_color_hex(on?C_RED:C_DIM), 0);
+    if(!on){
+        /* 停止后必须清掉上次录音的计时/电平/波形，否则屏幕看着像还在录 */
+        rec_sec = 0;
+        if(timer_lbl) lv_label_set_text(timer_lbl, "00:00:00");
+        for(int i=0;i<8;i++){
+            if(meters[i].bar){ lv_bar_set_value(meters[i].bar, 0, LV_ANIM_OFF); }
+            if(meters[i].mark){ lv_obj_add_flag(meters[i].mark, LV_OBJ_FLAG_HIDDEN); }
+        }
+        if(chart){
+            lv_chart_set_all_value(chart, ser1, 0);
+            lv_chart_set_all_value(chart, ser2, 0);
+            lv_chart_refresh(chart);
+            lv_obj_add_flag(chart, LV_OBJ_FLAG_HIDDEN);   /* 待机不留一条平线 */
+        }
+        if(dbfs_lbl) lv_label_set_text(dbfs_lbl, "-- dBFS");
+    } else if(chart){
+        lv_obj_remove_flag(chart, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 /* 录音反馈：按键红灯 + 顶部 LED（红=录音/绿=待机）+ 马达短振 */
 static void sysfs_write(const char *path, const char *val);
@@ -611,6 +629,7 @@ static void build_record_page(lv_obj_t *p){
     chart = lv_chart_create(p);
     lv_obj_set_size(chart,300,40);
     lv_obj_set_pos(chart,10,206);
+    lv_obj_add_flag(chart,LV_OBJ_FLAG_HIDDEN);     /* 待机不显示波形，开录才出现 */
     lv_obj_set_style_bg_opa(chart,LV_OPA_TRANSP,0);
     lv_obj_set_style_border_width(chart,0,0);
     lv_obj_set_style_pad_all(chart,0,0);
@@ -623,7 +642,7 @@ static void build_record_page(lv_obj_t *p){
     ser1=lv_chart_add_series(chart,lv_color_hex(C_GREEN),LV_CHART_AXIS_PRIMARY_Y);
     ser2=lv_chart_add_series(chart,lv_color_hex(0x1F8F4A),LV_CHART_AXIS_PRIMARY_Y);
 
-    dbfs_lbl = mk_label(p,"-72 dBFS",&lv_font_montserrat_14,C_DIM);
+    dbfs_lbl = mk_label(p,"-- dBFS",&lv_font_montserrat_14,C_DIM);
     lv_obj_set_pos(dbfs_lbl,10,250);
 
 
@@ -1075,8 +1094,9 @@ static void ui_tick(lv_timer_t *t){
     double tt = (double)(lv_tick_get())/1000.0;
     double base = 0.35 + 0.30*(0.5+0.5*sin(tt*1.7));
     if(!recording){
+        /* 待机时不留任何电平读数：上次的 -72 dBFS 看着仍像在采 */
         for(int i=0;i<8;i++) meter_update(&meters[i],0);
-        lv_label_set_text(dbfs_lbl,"-72 dBFS");
+        lv_label_set_text(dbfs_lbl,"-- dBFS");
         return;
     }
     for(int i=0;i<6;i++){
