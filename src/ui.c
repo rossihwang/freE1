@@ -534,6 +534,7 @@ static void mode_cb(lv_event_t *e){
     if(!tap_ok()) return;
     ui_activity();
     if(engine_running()) return;    /* 录音中不允许切拾音模式 */
+    if(g_geo_on) return;            /* 原始 8 通道采集由 PDM 阵列直接出流，模式无意义 */
     input_mode = !input_mode;
     apply_mode();
 }
@@ -825,6 +826,7 @@ static void geo_start(int secs){
         /* 原始采集固定拿全部 8 路麦克风，拾音模式开关在这一模式下没有意义 */
         if(g_mode_btn){ lv_obj_remove_flag(g_mode_btn, LV_OBJ_FLAG_CLICKABLE); lv_label_set_text(mode_lbl, "8 MIC ARRAY"); }
         rec_sec = 0;
+        screen_set(1);                 /* 熄屏时起采也要让人看到状态 */
         ui_activity();
         logmsg("geo: started pid %d, %d s -> /mnt/sdcard/geo/geo.wav", (int)p, secs);
     } else {
@@ -1572,7 +1574,7 @@ void ui_on_hw_key(int code, int pressed){
     switch(code){
     case 2:  if(g_depth>0) ui_pop_page(); else show_page((page_idx+2)%NPAGES); break;  /* MARK */
     case 3:  show_page((page_idx+1)%NPAGES); break;          /* KEY_2 STOP  -> 下一页 */
-    case 4:  if(engine_running()){ engine_stop(); set_rec_ui(0); } else if(engine_start(g_dir,g_device,input_mode,3600,8,FMT_RATE[g_fmt],FMT_BITS[g_fmt])==0){ rec_sec=0; set_rec_ui(1); } break; /* KEY_3 REC */
+    case 4:  toggle_record(); break;   /* KEY_3 REC：与屏幕按钮同一条路径（含原始 8 通道采集的停止） */
     case 7:  /* KEY_6 POWER：短按亮灭屏，长按 2 s 确认关机 */
         break;
     default: break;
