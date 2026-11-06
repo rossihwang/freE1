@@ -629,7 +629,7 @@ static void build_record_page(lv_obj_t *p){
 
     lv_obj_t *mb = lv_button_create(p);
     lv_obj_set_size(mb,150,32);
-    lv_obj_align(mb,LV_ALIGN_TOP_MID,-40,56);
+    lv_obj_align(mb,LV_ALIGN_TOP_MID,-40,53);
     lv_obj_set_style_radius(mb,12,0);
     lv_obj_set_style_bg_color(mb,lv_color_hex(C_PANEL),0);
     lv_obj_set_style_shadow_width(mb,0,0);
@@ -642,8 +642,8 @@ static void build_record_page(lv_obj_t *p){
 
     /* 监听开关（仅插耳机可用）：模式 chip 右侧 */
     monitor_btn = lv_button_create(p);
-    lv_obj_set_size(monitor_btn,76,34);
-    lv_obj_align(monitor_btn,LV_ALIGN_TOP_MID,92,55);   /* 留出右边距，别贴边被裁 */
+    lv_obj_set_size(monitor_btn,76,32);
+    lv_obj_align(monitor_btn,LV_ALIGN_TOP_MID,92,53);   /* 与模式胶囊同高，且不与下方容器重叠 */
     lv_obj_set_style_radius(monitor_btn,12,0);
     lv_obj_set_style_bg_color(monitor_btn,lv_color_hex(C_PANEL),0);
     lv_obj_set_style_shadow_width(monitor_btn,0,0);
@@ -655,26 +655,26 @@ static void build_record_page(lv_obj_t *p){
     monitor_refresh();
 
     /* ---- 可视化容器（两种拾音各一套）---- */
-    viz_omni = mk_panel(p,0,84,W,112,0,C_BG);
+    viz_omni = mk_panel(p,0,89,W,107,0,C_BG);
     lv_obj_add_flag(viz_omni,LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(viz_omni,reset_cb,LV_EVENT_CLICKED,NULL);
     {
         /* 方形分布：左列 3 条（ch5/ch2/ch0），右列 3 条（ch4/ch3/ch1） */
-        static const int rowy[3] = {84,108,132};
+        static const int rowy[3] = {89,113,137};
         for(int i=0;i<3;i++){
-            bars[i]   = mk_meter(viz_omni,4,rowy[i]-84,92,12)->bar;
-            bars[3+i] = mk_meter(viz_omni,224,rowy[i]-84,92,12)->bar;
+            bars[i]   = mk_meter(viz_omni,4,rowy[i]-89,92,12)->bar;
+            bars[3+i] = mk_meter(viz_omni,224,rowy[i]-89,92,12)->bar;
         }
     }
-    viz_top = mk_panel(p,0,84,W,112,0,C_BG);
+    viz_top = mk_panel(p,0,89,W,107,0,C_BG);
     lv_obj_add_flag(viz_top,LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(viz_top,reset_cb,LV_EVENT_CLICKED,NULL);
     {
         /* L/R 两条横向电平左右并排（录音键在其下方） */
         /* 定向模式下两颗麦朝向相同，标 L/R 反而误导，不放标签。
            纵向居中于"模式胶囊下沿(89) 到 REC 按钮上沿(150)"之间 */
-        bars_top[0]=mk_meter(viz_top,8,20,148,30)->bar;
-        bars_top[1]=mk_meter(viz_top,164,20,148,30)->bar;
+        bars_top[0]=mk_meter(viz_top,8,14,148,30)->bar;
+        bars_top[1]=mk_meter(viz_top,164,14,148,30)->bar;
     }
 
     rec_btn = lv_button_create(p);
@@ -1060,6 +1060,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
+    else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); logmsg("mode -> %d", input_mode); } }
     else if(!strncmp(b,"fmt ",4)){                        /* 设定录音格式 0=48k/24bit 1=44.1k/16bit */
         int v=atoi(b+4); if(v==0 || v==1){ g_fmt=v; if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "44.1k / 16bit" : "48k / 24bit"); fmt_save(); logmsg("format -> %d", g_fmt); }
     }
