@@ -964,7 +964,14 @@ static void ui_tick(lv_timer_t *t){
           if(statvfs(g_dir,&vf)==0){
               free_gb=(double)vf.f_bavail*vf.f_frsize/1e9;
               char b[48]; snprintf(b,sizeof b,"%.1f GB free",free_gb); lv_label_set_text(storage_val,b);
-              if(stor_lbl){ char b2[24]; snprintf(b2,sizeof b2,"%.1fG",free_gb); lv_label_set_text(stor_lbl,b2); }
+              if(stor_lbl){
+                  double bps = (double)FMT_RATE[g_fmt] * 2.0 * (FMT_BITS[g_fmt]/8.0);
+                  double hours = bps > 0 ? (free_gb*1e9 / bps / 3600.0) : 0;
+                  char b2[32];
+                  if(hours >= 10) snprintf(b2,sizeof b2,"%.1fG %.0fh", free_gb, hours);
+                  else            snprintf(b2,sizeof b2,"%.1fG %.1fh", free_gb, hours);
+                  lv_label_set_text(stor_lbl,b2);
+              }
           }
           /* 满盘 / 低电保护（仅在录音时动作） */
           if(g_device && engine_running()){
