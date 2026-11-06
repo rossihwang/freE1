@@ -10,12 +10,13 @@ someone at the device).
 
 | Item | Status | Notes |
 |---|---|---|
-| Monitor path (record → headphone) | **implemented, pending listening check** | Src/audio path done; 10 s recording with monitor showed 0 underruns / 0 drops. Needs a headphone listening check tonight. |
+| Monitor path (record → headphone) | **done** | Works. Opens `hw:0,0` directly (the `default` plug only granted 4096 frames and underran 40–120 times per 2 min); start threshold 85 ms. Measured 0 underruns / 0 drops over 68 s, delay ~85–130 ms. |
 | Mark / bookmark from the MARK key | idea | The MARK key is freed up (it no longer flips pages) but does nothing yet. Needs somewhere to record marks (sidecar file per segment) and a way to jump to them while playing back. |
+| 44.1 kHz support | blocked | The PDM driver returns zeros on ch6/ch7 below 48 kHz (limits L17). Would need either a driver fix or software resampling from 48 k, plus per-channel latency checks. |
 | VAD (voice-activated recording) | idea | Threshold tuning needs a real room. |
 | Gain presets (meeting / interview / music) | idea | AGC is currently a single fixed profile. |
 | Manual gain + AGC on/off | idea | Expose the AGC parameters that are already in `rec.c`. |
-| Omni delay alignment | blocked | Needs the true mic positions. Current knowledge: 6 mics in two columns, ~9–10 cm × 3–3.5 cm; TDOA from claps was unreliable. Measure with a fixed source at 1 m. |
+| Omni delay alignment | **unblocked** | Mic positions measured (`MIC_ARRAY_GEOMETRY.md`): two rows × three columns, 64 × 25 mm. Note ch6/ch7 do not behave like array elements, so align the six omni channels only. |
 
 ## Files
 
