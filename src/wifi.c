@@ -135,6 +135,26 @@ int wifi_connect(const char *ssid, const char *psk){
     } else {
         logmsg("wifi: reusing existing network id %d for '%s'", id, ssid);
     }
+    /* 复用已有条目时先把旧口令记下来：连接失败要把用户原来存的网络还原，
+       而不是简单删掉（删掉等于把用户的保存网络弄丢了）。 */
+    char oldpsk[128] = {0};
+    int had_old = 0;
+    {
+        char g[512] = {0};
+        char gc[256];
+        snprintf(gc,sizeof gc,"/usr/sbin/wpa_cli -i " IFACE " get_network %d psk 2>/dev/null", id);
+        if(run(gc,g,sizeof g)==0){
+            char *pp = strstr(g,"psk=");
+            if(pp){
+                pp += 4;
+                while(*pp=='"') pp++;
+                int k=0;
+                while(pp[k] && pp[k]!='"' && pp[k]!='\n' && k<(int)sizeof oldpsk-1){ oldpsk[k]=pp[k]; k++; }
+                oldpsk[k]=0;
+                had_old = (k > 0);
+            }
+        }
+    }
     char cmd[512];
     snprintf(cmd,sizeof cmd,"/usr/sbin/wpa_cli -i " IFACE " set_network %d ssid '\"%s\"' 2>/dev/null", id, ssid);
     if(run(cmd,buf,sizeof buf)!=0 || !strstr(buf,"OK")) return -1;
@@ -162,13 +182,30 @@ int wifi_connect(const char *ssid, const char *psk){
         logmsg("wifi: connect '%s' ok (id %d)", ssid, id);
         return 0;
     }
-    logmsg("wifi: connect '%s' FAILED, restoring (id %d)", ssid, id);
-    /* 只删掉这次新建的条目；再用 reconfigure 从配置文件重载，恢复原有网络 */
-    snprintf(cmd,sizeof cmd,"/usr/sbin/wpa_cli -i " IFACE " remove_network %d 2>/dev/null", id);
-    run(cmd,buf,sizeof buf);
+    logmsg("wifi: connect '%s' FAILED, restoring (id %d, saved_psk=%d)", ssid, id, had_old);
+    if(had_old){
+        /* 原来是保存过的网络：把旧口令写回去，网络列表保持原样 */
+        snprintf(cmd,sizeof cmd,"/usr/sbin/wpa_cli -i " IFACE " set_network %d psk '\"%s\"' 2>/dev/null", id, oldpsk);
+        run(cmd,buf,sizeof buf);
+    } else {
+        /* 这次新建的条目：删掉即可 */
+        snprintf(cmd,sizeof cmd,"/usr/sbin/wpa_cli -i " IFACE " remove_network %d 2>/dev/null", id);
+        run(cmd,buf,sizeof buf);
+    }
     run("/usr/sbin/wpa_cli -i " IFACE " reconfigure 2>/dev/null", buf, sizeof buf);
     usleep(500000);
     run("/usr/sbin/wpa_cli -i " IFACE " enable_network all 2>/dev/null", buf, sizeof buf);
     run("/usr/sbin/wpa_cli -i " IFACE " reconnect 2>/dev/null", buf, sizeof buf);
+    /* 回退也是异步的：再等最多 10 s，把最终结果记进日志，方便判断"回滚是否真的成功" */
+    for(int i=0;i<20;i++){
+        usleep(500000);
+        char st[512] = {0};
+        if(run("/usr/sbin/wpa_cli -i " IFACE " status 2>/dev/null", st, sizeof st)==0
+           && strstr(st,"wpa_state=COMPLETED")){
+            logmsg("wifi: restored to previous network (%.1f s)", 0.5 + i*0.5);
+            return -2;
+        }
+    }
+    logmsg("wifi: restore did NOT reconnect - device is offline");
     return -2;
 }

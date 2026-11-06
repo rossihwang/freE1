@@ -324,6 +324,12 @@ void wifi_page_on_show(void){
 
 /* 由 ui.c 的 200ms tick 调用 */
 void wifi_page_tick(void){
+    /* 顶部状态每 2 s 跟一次真实状态：失败回退是异步的（reconfigure + reconnect 要几秒），
+       只在失败那一刻刷一次会停在 "not connected"，而系统其实已经连回去了。 */
+    {
+        static int64_t last_ms = 0;
+        if(mono_ms() - last_ms > 2000){ last_ms = mono_ms(); refresh_status(); }
+    }
     if(g_scan_busy && g_scan_done){
         g_scan_busy=0;
         if(scan_btn_lbl) lv_label_set_text(scan_btn_lbl,"SCAN");
