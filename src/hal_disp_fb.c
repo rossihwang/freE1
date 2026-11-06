@@ -75,12 +75,23 @@ lv_display_t *hal_disp_fb_init(void){
     if(g_vi.bits_per_pixel != 32){ logmsg("fb0: expect 32bpp"); close(g_fd); g_fd=-1; return NULL; }
 
     /* 强制把 VOP 切到 fb0：某些启动流程下内核仍在扫描 u-boot 的 logo 缓冲，
-       不 pan 一次屏幕就一直是 logo */
+       不 pan 一次屏幕就一直是 logo。
+       开机早期 pan 可能返回 EBUSY(16)——VOP 还没准备好吃新配置——
+       所以先重设 var，再重试几次，别只试一次就放弃。 */
     {
         struct fb_var_screeninfo v = g_vi;
         v.yoffset = 0; v.xoffset = 0; v.activate = FB_ACTIVATE_NOW;
-        if(ioctl(g_fd, FBIOPAN_DISPLAY, &v) < 0) logmsg("fb0: pan failed (%d)", errno);
-        else logmsg("fb0: pan to yoffset=0");
+        ioctl(g_fd, FBIOPUT_VSCREENINFO, &v);
+        /* 实测这台机器开机时 pan 一直 EBUSY(16)：VOP 不接受这个 ioctl。
+           显示仍然正常（直接写 fb0，再 unblank 就够了），所以只试两次、
+           并且只记一条，免得每次启动刷五行没用的日志。 */
+        int ok = 0;
+        for(int i = 0; i < 2 && !ok; i++){
+            if(ioctl(g_fd, FBIOPAN_DISPLAY, &v) == 0) ok = 1;
+            else usleep(30000);
+        }
+        if(ok) logmsg("fb0: pan to yoffset=0");
+        else   logmsg("fb0: pan unsupported (%d), relying on var+unblank", errno);
         if(ioctl(g_fd, FBIOBLANK, FB_BLANK_UNBLANK) < 0) logmsg("fb0: unblank failed (%d)", errno);
         else logmsg("fb0: unblanked");
     }
