@@ -712,7 +712,7 @@ static void build_record_page(lv_obj_t *p){
 static void del_row_cb(lv_event_t *e);
 static void play_row_cb(lv_event_t *e);
 
-typedef struct { char name[192]; long size; double dur; long mt; } finfo;
+typedef struct { char name[192]; long size; double dur; long mt; int rate, bits; } finfo;
 static int finfo_cmp(const void *a, const void *b){
     const finfo *x=a,*y=b;
     return (y->mt > x->mt) - (y->mt < x->mt);
@@ -732,10 +732,13 @@ static void files_refresh(void){
             unsigned char h[44]; if(fread(h,1,44,f)!=44){ fclose(f); continue; }
             unsigned long data = h[40]|(h[41]<<8)|(h[42]<<16)|((unsigned long)h[43]<<24);
             unsigned long br   = h[28]|(h[29]<<8)|(h[30]<<16)|((unsigned long)h[31]<<24);
+            unsigned long rate = h[24]|(h[25]<<8)|(h[26]<<16)|((unsigned long)h[27]<<24);
+            unsigned bits      = h[34]|(h[35]<<8);
             fseek(f,0,SEEK_END); long sz=ftell(f); fclose(f);
             finfo *it=&arr[n++];
             snprintf(it->name,sizeof it->name,"%s",e->d_name);
             it->size=sz; it->dur = br? (double)data/br : 0;
+            it->rate=(int)rate; it->bits=(int)bits;
             struct stat stt; it->mt = stat(path,&stt)==0 ? (long)stt.st_mtime : 0;
         }
         closedir(d);
@@ -780,7 +783,12 @@ static void files_refresh(void){
         lv_obj_set_width(nm, 276);
         lv_obj_align(nm,LV_ALIGN_LEFT_MID,12,-14);
         char sub[96]; unsigned secs=(unsigned)(arr[i].dur+0.5);
-        snprintf(sub,sizeof sub,"%02u:%02u:%02u  |  %.1f MB",secs/3600,(secs/60)%60,secs%60,arr[i].size/1048576.0);
+        char rs[12];
+        if(arr[i].rate == 48000)      snprintf(rs,sizeof rs,"48k");
+        else if(arr[i].rate == 44100) snprintf(rs,sizeof rs,"44.1k");
+        else                          snprintf(rs,sizeof rs,"%d",arr[i].rate);
+        snprintf(sub,sizeof sub,"%02u:%02u:%02u  |  %.1f MB  |  %s/%dbit",
+                 secs/3600,(secs/60)%60,secs%60,arr[i].size/1048576.0, rs, arr[i].bits);
         lv_obj_t *sb=mk_label(row,sub,&lv_font_montserrat_14, play_row? 0xD8E6DD : C_DIM);
         lv_obj_align(sb,LV_ALIGN_LEFT_MID,12,14);
         lv_obj_add_flag(row,LV_OBJ_FLAG_CLICKABLE);
