@@ -1147,6 +1147,7 @@ static void transport_show(int on){
     if(!transport_bar) return;
     if(on) lv_obj_remove_flag(transport_bar, LV_OBJ_FLAG_HIDDEN);
     else   lv_obj_add_flag(transport_bar, LV_OBJ_FLAG_HIDDEN);
+    if(files_box) lv_obj_set_height(files_box, on ? 220 : 276);   /* 让出/归还空间 */
 }
 
 static void transport_btn_cb(lv_event_t *e){
@@ -1168,7 +1169,16 @@ static void transport_slider_cb(lv_event_t *e){
     play_state_t ps; play_get_state(&ps);
     if(code == LV_EVENT_PRESSED || code == LV_EVENT_VALUE_CHANGED){
         transport_dragging = 1;
-        if(ps.total_ms > 0) transport_drag_ms = (int64_t)v * ps.total_ms / 100;
+        if(ps.total_ms > 0){
+            transport_drag_ms = (int64_t)v * ps.total_ms / 100;
+            if(transport_time){                       /* 拖动时预览目标时间 */
+                char b[32];
+                snprintf(b, sizeof b, "%lld:%02lld / %lld:%02lld",
+                         (long long)(transport_drag_ms / 60000), (long long)(transport_drag_ms / 1000 % 60),
+                         (long long)(ps.total_ms / 60000), (long long)(ps.total_ms / 1000 % 60));
+                lv_label_set_text(transport_time, b);
+            }
+        }
     }
     if(code == LV_EVENT_RELEASED){
         if(transport_drag_ms >= 0) play_seek_ms(transport_drag_ms);
