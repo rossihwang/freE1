@@ -72,6 +72,7 @@ static lv_obj_t *bars_top[2];
 static pid_t   g_geo_pid = -1;
 static int     g_geo_on;
 static int64_t g_geo_t0;
+static int64_t g_geo_stop_arm;   /* 非 0 = 已经按过一次停止，等第二次确认 */
 
 static lv_obj_t *mk_panel(lv_obj_t *parent,int x,int y,int w,int h,int r,uint32_t bg);
 static lv_obj_t *mk_hbar(lv_obj_t *parent,int x,int y,int w,int h);
@@ -515,7 +516,23 @@ static void monitor_btn_cb(lv_event_t *e){
 
 static void geo_stop(void);
 static void toggle_record(void){
-    if(g_geo_on){ geo_stop(); set_rec_ui(0); return; }   /* 原始 8 通道采集：STOP 就停它 */
+    if(g_geo_on){
+        /* 原始 8 通道采集要按两次才停：测量时手上一直动着设备，误碰 STOP 一次
+           就会把整段采集废掉（实测废过两次）。第一次按只进入待确认状态。 */
+        if(!g_geo_stop_arm || mono_ms() - g_geo_stop_arm > 3000){
+            g_geo_stop_arm = mono_ms();
+            if(state_lbl){
+                lv_label_set_text(state_lbl, "TAP AGAIN TO STOP");
+                lv_obj_set_style_text_color(state_lbl, lv_color_hex(0xFFC400), 0);
+            }
+            logmsg("geo: stop armed (press again within 3 s)");
+        } else {
+            g_geo_stop_arm = 0;
+            geo_stop();
+            set_rec_ui(0);
+        }
+        return;
+    }
     if(!engine_running() && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (record start)"); }
     if(engine_running()){
         engine_stop();
@@ -801,6 +818,7 @@ static void geo_stop(void){
         g_geo_pid = -1;
     }
     g_geo_on = 0;
+    g_geo_stop_arm = 0;
     logmsg("geo: stopped");
 }
 static void geo_start(int secs){
@@ -818,7 +836,7 @@ static void geo_start(int secs){
         _exit(127);
     }
     if(p > 0){
-        g_geo_pid = p; g_geo_t0 = mono_ms(); g_geo_on = 1;
+        g_geo_pid = p; g_geo_t0 = mono_ms(); g_geo_on = 1; g_geo_stop_arm = 0;
         set_rec_ui(1);
         lv_label_set_text(state_lbl, "RAW 8CH");
         lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0);
@@ -1056,6 +1074,12 @@ static void ui_tick(lv_timer_t *t){
             logmsg("geo: capture finished (arecord exited)");
             set_rec_ui(0);
         } else {
+            if(g_geo_stop_arm && mono_ms() - g_geo_stop_arm > 3000){
+                g_geo_stop_arm = 0;      /* 没再按，取消停止 */
+                lv_label_set_text(state_lbl, "RAW 8CH");
+                lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0);
+                logmsg("geo: stop cancelled");
+            }
             uint32_t s = (uint32_t)((mono_ms() - g_geo_t0) / 1000);
             char buf[16];
             snprintf(buf, sizeof buf, "%02u:%02u:%02u", s/3600, (s/60)%60, s%60);
