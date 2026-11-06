@@ -702,7 +702,7 @@ static void build_record_page(lv_obj_t *p){
     lv_obj_set_style_shadow_width(rec_btn,0,0);
     rec_lbl = mk_label(rec_btn,"REC",&lv_font_montserrat_20,0x05060A);
     lv_obj_center(rec_lbl);
-    lv_obj_add_event_cb(rec_btn,rec_cb,LV_EVENT_CLICKED,NULL);
+    lv_obj_add_event_cb(rec_btn,rec_cb,LV_EVENT_SHORT_CLICKED,NULL);
     lv_obj_add_event_cb(rec_btn,rec_long_cb,LV_EVENT_LONG_PRESSED,NULL);   /* 长按 = 停止 */
 
     chart = lv_chart_create(p);
@@ -812,7 +812,7 @@ static void files_refresh(void){
         lv_obj_align(sb,LV_ALIGN_LEFT_MID,12,14);
         lv_obj_add_flag(row,LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row,del_row_cb,LV_EVENT_LONG_PRESSED,(void*)arr[i].name);
-        lv_obj_add_event_cb(row,play_row_cb,LV_EVENT_CLICKED,(void*)arr[i].name);
+        lv_obj_add_event_cb(row,play_row_cb,LV_EVENT_SHORT_CLICKED,(void*)arr[i].name);
         lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);   /* 让页级滑动能收到 */
         y+=90;
     }
