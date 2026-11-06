@@ -320,6 +320,9 @@ static void no_scroll_recursive(lv_obj_t *o){
 static void show_page(int p);
 static int64_t g_hw_reclaim_at;
 static char g_play_file[192];
+static lv_obj_t *g_row_fill = NULL;      /* 播放中那一行的背景进度条 */
+static int g_row_fill_pct = -1;
+#define ROW_W     304
 static void play_file(const char *name);
 static void transport_update(const play_state_t *ps);
 static void transport_build(lv_obj_t *parent);
@@ -742,6 +745,7 @@ static void files_refresh(void){
         }
         closedir(d);
     }
+    g_row_fill = NULL;                 /* 行要重建，旧指针作废 */
     qsort(arr,n,sizeof arr[0],finfo_cmp);
     if(n==0){
         lv_obj_t *l=mk_label(files_box,"no recordings",&lv_font_montserrat_14,C_DIM);
@@ -762,16 +766,27 @@ static void files_refresh(void){
         char shown[160];
         snprintf(shown,sizeof shown,"%s", disp);
         if(play_is_active() && !strcmp(arr[i].name,g_play_file)){
-            lv_obj_set_style_bg_color(row, lv_color_hex(0x2E7D50), 0);   /* 浅绿高亮：正在播放这一行 */
+            lv_obj_set_style_bg_color(row, lv_color_hex(0x16241C), 0);   /* 播放行底色压暗，让进度条显出来 */
             play_row = 1;
+            /* 背景进度条：宽度随播放进度增长，文字在它上面 */
+            g_row_fill = lv_obj_create(row);
+            lv_obj_remove_style_all(g_row_fill);
+            lv_obj_set_size(g_row_fill, 2, 84);
+            lv_obj_set_pos(g_row_fill, 0, 0);
+            lv_obj_set_style_bg_color(g_row_fill, lv_color_hex(0x2E7D50), 0);
+            lv_obj_set_style_bg_opa(g_row_fill, LV_OPA_COVER, 0);
+            lv_obj_set_style_radius(g_row_fill, 12, 0);
+            lv_obj_remove_flag(g_row_fill, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_remove_flag(g_row_fill, LV_OBJ_FLAG_SCROLLABLE);
+            g_row_fill_pct = -1;
         }
-        lv_obj_t *nm=mk_label(row,shown,&lv_font_montserrat_20, play_row? 0x08180F : C_TEXT);
+        lv_obj_t *nm=mk_label(row,shown,&lv_font_montserrat_20, C_TEXT);
         lv_label_set_long_mode(nm, LV_LABEL_LONG_SCROLL_CIRCULAR);
         lv_obj_set_width(nm, 276);
         lv_obj_align(nm,LV_ALIGN_LEFT_MID,12,-14);
         char sub[96]; unsigned secs=(unsigned)(arr[i].dur+0.5);
         snprintf(sub,sizeof sub,"%02u:%02u:%02u  |  %.1f MB",secs/3600,(secs/60)%60,secs%60,arr[i].size/1048576.0);
-        lv_obj_t *sb=mk_label(row,sub,&lv_font_montserrat_14, play_row? 0x14331F : C_DIM);
+        lv_obj_t *sb=mk_label(row,sub,&lv_font_montserrat_14, play_row? 0xD8E6DD : C_DIM);
         lv_obj_align(sb,LV_ALIGN_LEFT_MID,12,14);
         lv_obj_add_flag(row,LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row,del_row_cb,LV_EVENT_LONG_PRESSED,(void*)arr[i].name);
@@ -1102,6 +1117,9 @@ static void ui_tick(lv_timer_t *t){
     }
     play_state_t ps;
     play_get_state(&ps);
+    { static int was_active = 0;
+      if(was_active && !ps.active && page_idx == 1) files_refresh();   /* 播完：清掉行高亮 */
+      was_active = ps.active; }
     transport_update(&ps);
     if(g_geo_on){
         /* 8 通道原始采集：数据不经过本进程，只能显示计时，别画假的电平/波形 */
@@ -1486,6 +1504,15 @@ static void transport_update(const play_state_t *ps){
         if(pct != transport_last_pct){
             transport_last_pct = pct;
             lv_slider_set_value(transport_slider, pct, LV_ANIM_OFF);
+        }
+    }
+    if(g_row_fill && ps->total_ms > 0){
+        int p = (int)(ps->pos_ms * 100 / ps->total_ms);
+        if(p < 0) p = 0; if(p > 100) p = 100;
+        if(p != g_row_fill_pct){
+            g_row_fill_pct = p;
+            int w = ROW_W * p / 100;
+            lv_obj_set_width(g_row_fill, w < 4 ? 4 : w);
         }
     }
     if(transport_time){
