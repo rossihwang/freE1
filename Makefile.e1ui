@@ -4,15 +4,15 @@ CC      ?= aarch64-linux-gcc
 LVGL    := hwtest/third_party/lvgl
 SRC     := src/util.c src/wav.c src/session.c src/audio_dev.c src/audio_sim.c \
            src/rec.c src/engine.c src/http.c src/wifi.c src/wifi_ui.c src/hal_disp_fb.c src/hal_input.c \
-           src/ui.c src/main.c common/hal_sysfs.c
+           src/ui.c src/main.c src/audio_play.c common/hal_sysfs.c
 LVSRC   := $(shell find $(LVGL)/src -name '*.c')
 OBJ     := $(patsubst %.c,build_e1ui/obj/%.o,$(SRC))
 LVOBJ   := $(patsubst $(LVGL)/src/%.c,build_e1ui/lvgl/%.o,$(LVSRC))
-CFLAGS  := -O2 -g -std=gnu11 -march=armv8-a -Isrc -Icommon -Ihwtest -I$(LVGL) \
+CFLAGS  := -O2 -g -std=gnu11 -march=armv8-a -Isrc -Icommon -Ihwtest -I../cross/out/alsa/include -I$(LVGL) \
            -DLV_CONF_INCLUDE_SIMPLE -DFREEL1_NO_PNG -DFREEL1_NO_X11 \
            -Wall -Wno-unused-parameter -Wno-sign-compare -MMD -MP
-LDFLAGS := -static
-LDLIBS  := -lm -lpthread
+LDFLAGS := -L../cross/out/alsa
+LDLIBS  := -lm -lpthread -lasound
 TARGET  := build_e1ui/freE1
 
 all: $(TARGET)

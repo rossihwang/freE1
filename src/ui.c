@@ -18,6 +18,7 @@
 #include "engine.h"
 #include "http.h"
 #include "wifi_ui.h"
+#include "audio_play.h"
 #include "wifi.h"
 #include "hal_sysfs.h"
 #include <sys/ioctl.h>
@@ -306,10 +307,11 @@ static void no_scroll_recursive(lv_obj_t *o){
 }
 
 static void show_page(int p);
-static pid_t g_play_pid;
 static int64_t g_hw_reclaim_at;
-static void play_stop(void);
-static void kill_stale_aplay(void);
+static char g_play_file[192];
+static void play_file(const char *name);
+static void transport_update(const play_state_t *ps);
+static void transport_build(lv_obj_t *parent);
 static lv_group_t *g_group;
 static void key_cb(lv_event_t *e){
     uint32_t k = lv_event_get_key(e);
@@ -357,7 +359,7 @@ static void add_back_btn(lv_obj_t *p){
 }
 static void show_page(int p){
     logmsg("page -> %d (+%lld ms)", p, (long long)(mono_ms() - g_start_ms));
-    if(p != 1 && g_play_pid > 0){ play_stop(); logmsg("play: stopped (page change)"); }
+    if(p != 1 && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (page change)"); }
     if(p != 0 && g_start_ms && (mono_ms() - g_start_ms) < 800){
         logmsg("page: ignored (startup window)");
         return;
@@ -447,7 +449,7 @@ static void led_set(int on){
 static void motor_pulse(void){ hs_motor_pattern(0); }
 
 static void toggle_record(void){
-    if(!engine_running() && g_play_pid > 0){ play_stop(); logmsg("play: stopped (record start)"); }
+    if(!engine_running() && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (record start)"); }
     if(engine_running()){
         engine_stop();
         set_rec_ui(0);
@@ -576,16 +578,10 @@ static void build_record_page(lv_obj_t *p){
 
 static void del_row_cb(lv_event_t *e);
 static void play_row_cb(lv_event_t *e);
-static void play_file(const char *name);
-static void play_stop(void);
-static void kill_stale_aplay(void);
-static char g_play_file[192];
-static pid_t g_play_pid = -1;
-static lv_obj_t *g_play_bar = NULL;   /* 正在播放那一行的进度条 */
-static int64_t g_play_start_ms = 0;
-static pid_t g_play_pids[8];
-static int   g_play_npids = 0;
-static int     g_play_total_ms = 0;
+static lv_obj_t *transport_bar, *transport_time, *transport_slider, *transport_btn_lbl;
+static int transport_dragging = 0;
+static int64_t transport_drag_ms = -1;
+static int transport_last_pct = -1;
 
 typedef struct { char name[192]; long size; double dur; long mt; } finfo;
 static int finfo_cmp(const void *a, const void *b){
@@ -596,7 +592,6 @@ static void files_refresh(void){
     if(!files_box) return;
     lv_coord_t keep_y = lv_obj_get_scroll_y(files_box);   /* 记住滚动位置，重建后恢复 */
     lv_obj_clean(files_box);
-    g_play_bar = NULL;
     static finfo arr[128]; int n=0;
     DIR *d=opendir(g_dir);
     if(d){
@@ -635,16 +630,9 @@ static void files_refresh(void){
           memmove(disp,p2,strlen(p2)+1); }
         char shown[160];
         snprintf(shown,sizeof shown,"%s", disp);
-        if(g_play_pid>0 && !strcmp(arr[i].name,g_play_file)){
-            lv_obj_set_style_bg_color(row, lv_color_hex(0x2E7D50), 0);   /* 浅绿高亮：这是正在播放的行 */
+        if(play_is_active() && !strcmp(arr[i].name,g_play_file)){
+            lv_obj_set_style_bg_color(row, lv_color_hex(0x2E7D50), 0);   /* 浅绿高亮：正在播放这一行 */
             play_row = 1;
-            lv_obj_t *prog = lv_obj_create(row);
-            lv_obj_remove_style_all(prog);
-            lv_obj_set_pos(prog, 0, 0);
-            lv_obj_set_size(prog, 1, 84);
-            lv_obj_set_style_bg_color(prog, lv_color_hex(C_GREEN), 0);    /* 主题绿：已播放进度 */
-            lv_obj_set_style_bg_opa(prog, LV_OPA_COVER, 0);
-            g_play_bar = prog;
         }
         lv_obj_t *nm=mk_label(row,shown,&lv_font_montserrat_20, play_row? 0x08180F : C_TEXT);
         lv_label_set_long_mode(nm, LV_LABEL_LONG_SCROLL_CIRCULAR);
@@ -698,8 +686,9 @@ static void build_files_page(lv_obj_t *p){
     lv_obj_align(t,LV_ALIGN_TOP_MID,0,10);
     files_hdr = mk_label(p,"",&lv_font_montserrat_14,C_RED);
     lv_obj_align(files_hdr,LV_ALIGN_TOP_RIGHT,-10,10);
-    files_box = mk_panel(p,0,26,W,276,0,C_BG);
+    files_box = mk_panel(p,0,26,W,220,0,C_BG);
     lv_obj_remove_flag(files_box,LV_OBJ_FLAG_CLICKABLE);
+    transport_build(p);
     files_refresh();
 }
 
@@ -819,6 +808,8 @@ static void poll_cmd(void){
     else if(!strncmp(b,"pwr",3)){ ui_on_hw_key(7,1); lv_timer_t *t=lv_timer_create(pwr_relay_cb,120,NULL); lv_timer_set_repeat_count(t,1); }
     else if(!strncmp(b,"play ",5)){ play_stop(); play_file(b+5); }
     else if(!strncmp(b,"pstop",5)){ play_stop(); logmsg("play: stopped (cmd)"); }
+    else if(!strncmp(b,"ppause",6)){ play_toggle_pause(); logmsg("play: toggle pause (cmd)"); }
+    else if(!strncmp(b,"pseek ",6)){ play_seek_ms(atoll(b+6)); logmsg("play: seek %s ms (cmd)", b+6); }
     else if(!strncmp(b,"httpoff",7)){ logmsg("test: http_stop begin"); http_stop(); logmsg("test: http_stop done"); }
     else if(!strncmp(b,"httpon",6)){ int r=http_start(g_dir,8080); logmsg("test: http_start -> %d", r); }
     else if(!strncmp(b,"state",5)){
@@ -900,30 +891,9 @@ static void ui_tick(lv_timer_t *t){
             logmsg("hwtest: exited, reclaim scheduled");
         }
     }
-    if(g_play_pid > 0){
-        if(g_play_bar && g_play_total_ms > 0){
-            int64_t el = mono_ms() - g_play_start_ms;
-            int pct = (int)(el * 100 / g_play_total_ms);
-            if(pct < 0) pct = 0; if(pct > 100) pct = 100;
-            lv_obj_set_width(g_play_bar, (304 - 16) * pct / 100);
-        }
-        for(int i=0;i<g_play_npids;i++){
-            if(g_play_pids[i] <= 0) continue;
-            int st = 0;
-            if(waitpid(g_play_pids[i], &st, WNOHANG) == g_play_pids[i]){
-                if(g_play_pids[i] == g_play_pid){
-                    logmsg("play: finished");
-                    g_play_pid = -1; g_play_file[0] = 0;
-                    if(page_idx == 1) files_refresh();
-                }
-                g_play_pids[i] = -1;
-            }
-        }
-        if(g_play_npids > 0 && g_play_pids[0] == -1){
-            int k=0; for(int i=0;i<g_play_npids;i++) if(g_play_pids[i] > 0) g_play_pids[k++]=g_play_pids[i];
-            g_play_npids = k;
-        }
-    }
+    play_state_t ps;
+    play_get_state(&ps);
+    transport_update(&ps);
     if(!g_shots && recording != engine_running()){
         set_rec_ui(engine_running());
         if(!engine_running()){ ui_activity(); g_off_at = 0; }   /* 停录后重新计时，别立刻睡 */
@@ -1145,31 +1115,101 @@ static void del_ok_cb(lv_event_t *e){
     if(unlink(path)==0) logmsg("deleted %s", g_del_name);
     del_dlg_close(); files_refresh();
 }
-static void kill_stale_aplay(void){
-    /* UI 重启会留下孤儿 aplay（busybox 没有 pkill），必须主动清 */
-    system("killall -9 aplay >/dev/null 2>&1");
+/* ---------- 播放：进程内 ALSA，底部播放条 ---------- */
+static void transport_show(int on){
+    if(!transport_bar) return;
+    if(on) lv_obj_remove_flag(transport_bar, LV_OBJ_FLAG_HIDDEN);
+    else   lv_obj_add_flag(transport_bar, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void play_stop(void){
-    for(int i=0;i<g_play_npids;i++){
-        if(g_play_pids[i] > 0){ kill(g_play_pids[i], SIGTERM); waitpid(g_play_pids[i], NULL, 0); g_play_pids[i] = -1; }
+static void transport_btn_cb(lv_event_t *e){
+    (void)e;
+    if(!tap_ok()) return;
+    play_toggle_pause();
+}
+static void transport_stop_cb(lv_event_t *e){
+    (void)e;
+    play_stop();
+    g_play_file[0] = 0;
+    if(page_idx == 1) files_refresh();
+    logmsg("play: stopped");
+}
+static void transport_slider_cb(lv_event_t *e){
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *sl = lv_event_get_target(e);
+    int v = (int)lv_slider_get_value(sl);
+    play_state_t ps; play_get_state(&ps);
+    if(code == LV_EVENT_PRESSED || code == LV_EVENT_VALUE_CHANGED){
+        transport_dragging = 1;
+        if(ps.total_ms > 0) transport_drag_ms = (int64_t)v * ps.total_ms / 100;
     }
-    g_play_npids = 0;
-    if(g_play_pid > 0){ kill(g_play_pid, SIGTERM); }
-    g_play_pid = -1; g_play_file[0] = 0; g_play_bar = NULL;
-    kill_stale_aplay();
+    if(code == LV_EVENT_RELEASED){
+        if(transport_drag_ms >= 0) play_seek_ms(transport_drag_ms);
+        transport_dragging = 0;
+        transport_drag_ms = -1;
+    }
 }
 
-static int wav_duration_ms(const char *path){
-    FILE *f=fopen(path,"rb");
-    if(!f) return 0;
-    unsigned char h[44];
-    if(fread(h,1,44,f)!=44){ fclose(f); return 0; }
-    fclose(f);
-    unsigned data = h[40] | (h[41]<<8) | (h[42]<<16) | ((unsigned)h[43]<<24);
-    unsigned rate = h[28] | (h[29]<<8) | (h[30]<<16) | ((unsigned)h[31]<<24);
-    if(rate == 0) return 0;
-    return (int)((uint64_t)data * 1000 / rate);
+static void transport_build(lv_obj_t *parent){
+    transport_bar = mk_panel(parent, 0, 246, W, 56, 0, C_PANEL);
+    lv_obj_remove_flag(transport_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *btn = lv_button_create(transport_bar);
+    lv_obj_set_size(btn, 44, 44);
+    lv_obj_align(btn, LV_ALIGN_LEFT_MID, 6, 0);
+    lv_obj_set_style_radius(btn, 22, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(C_GREEN), 0);
+    lv_obj_set_style_shadow_width(btn, 0, 0);
+    transport_btn_lbl = mk_label(btn, "II", &lv_font_montserrat_20, C_BG);
+    lv_obj_center(transport_btn_lbl);
+    lv_obj_add_event_cb(btn, transport_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    transport_slider = lv_slider_create(transport_bar);
+    lv_obj_set_size(transport_slider, 160, 6);
+    lv_obj_align(transport_slider, LV_ALIGN_LEFT_MID, 58, -8);
+    lv_slider_set_range(transport_slider, 0, 100);
+    lv_obj_set_style_bg_color(transport_slider, lv_color_hex(0x2E7D50), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(transport_slider, lv_color_hex(C_GREEN), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(transport_slider, lv_color_hex(C_GREEN), LV_PART_KNOB);
+    lv_obj_add_event_cb(transport_slider, transport_slider_cb, LV_EVENT_ALL, NULL);
+
+    transport_time = mk_label(transport_bar, "0:00 / 0:00", &lv_font_montserrat_14, C_DIM);
+    lv_obj_align(transport_time, LV_ALIGN_LEFT_MID, 58, 16);
+
+    lv_obj_t *x = lv_button_create(transport_bar);
+    lv_obj_set_size(x, 40, 40);
+    lv_obj_align(x, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_set_style_radius(x, 20, 0);
+    lv_obj_set_style_bg_color(x, lv_color_hex(0x3A1F1F), 0);
+    lv_obj_set_style_shadow_width(x, 0, 0);
+    lv_obj_t *xl = mk_label(x, "X", &lv_font_montserrat_20, C_RED);
+    lv_obj_center(xl);
+    lv_obj_add_event_cb(x, transport_stop_cb, LV_EVENT_CLICKED, NULL);
+
+    transport_show(0);
+}
+
+static void transport_update(const play_state_t *ps){
+    if(!transport_bar) return;
+    transport_show(ps->active ? 1 : 0);
+    if(!ps->active) return;
+    if(transport_btn_lbl) lv_label_set_text(transport_btn_lbl, ps->paused ? ">" : "II");
+    if(transport_dragging) return;          /* 拖动时不回写，避免打架 */
+    if(ps->total_ms > 0){
+        int pct = (int)(ps->pos_ms * 100 / ps->total_ms);
+        if(pct < 0) pct = 0; if(pct > 100) pct = 100;
+        if(pct != transport_last_pct){
+            transport_last_pct = pct;
+            lv_slider_set_value(transport_slider, pct, LV_ANIM_OFF);
+        }
+    }
+    if(transport_time){
+        char b[32];
+        snprintf(b, sizeof b, "%lld:%02lld / %lld:%02lld",
+                 (long long)(ps->pos_ms / 60000), (long long)(ps->pos_ms / 1000 % 60),
+                 (long long)(ps->total_ms / 60000), (long long)(ps->total_ms / 1000 % 60));
+        lv_label_set_text(transport_time, b);
+    }
 }
 
 static void play_file(const char *name){
@@ -1178,45 +1218,30 @@ static void play_file(const char *name){
         logmsg("play: refused (recording)");
         return;
     }
-    char path[600];
-    snprintf(path,sizeof path,"%s/%s", g_dir, name);
-    g_play_total_ms = wav_duration_ms(path);
-    g_play_start_ms = mono_ms();
-    logmsg("play: request %s", name);
-    pid_t pid = fork();
-    if(pid < 0){ logmsg("play: fork failed"); return; }
-    if(pid == 0){
-        int lg = open("/mnt/sdcard/freE1/aplay.log", O_WRONLY|O_CREAT|O_APPEND, 0644);
-        if(lg >= 0){ dup2(lg, 1); dup2(lg, 2); close(lg); }
-        execl("/usr/bin/aplay", "aplay", "-q", path, (char*)NULL);
-        _exit(127);
-    }
-    if(pid > 0){
-        if(g_play_npids < 8) g_play_pids[g_play_npids++] = pid;
-        g_play_pid = pid;
-        snprintf(g_play_file,sizeof g_play_file,"%s", name);
-        logmsg("play: %s (pid %d)", name, (int)pid);
-        if(page_idx == 1) files_refresh();
-    }
+    if(play_open(g_dir, name) != 0) return;
+    snprintf(g_play_file, sizeof g_play_file, "%s", name);
+    transport_last_pct = -1;
+    logmsg("play: %s", name);
+    if(page_idx == 1) files_refresh();
 }
 
 static void play_row_cb(lv_event_t *e){
     const char *n = (const char*)lv_event_get_user_data(e);
     if(hal_input_last_drag()) return;   /* 手指是滑动的，不当成点击 */
-    if(engine_running()){               /* 录音中禁止播放 */
+    if(engine_running()){
         show_warn("Stop recording before playing a file.");
         logmsg("play: refused (recording)");
         return;
     }
     ui_activity();
-    if(g_play_pid > 0 && !strcmp(n, g_play_file)){
-        play_stop();                      /* 再点一次 = 停止 */
-        logmsg("play: stopped");
+    play_state_t ps; play_get_state(&ps);
+    if(ps.active && !strcmp(n, g_play_file)){
+        play_toggle_pause();            /* 点正在播放的行 = 暂停/继续 */
+        logmsg("play: %s", ps.paused ? "resume" : "pause");
     } else {
         play_stop();
         play_file(n);
     }
-    files_refresh();
 }
 
 static void del_row_cb(lv_event_t *e){
@@ -1420,7 +1445,6 @@ int ui_run_device(const char *dir, int http_port){
     fmt_load();
     guard_load();
     hs_motor(false);   /* 清掉上次可能卡住的振动 */
-    kill_stale_aplay();   /* 清理上次进程遗留的播放 */
     lv_init();
     lv_tick_set_cb(dev_tick_cb);
     lv_display_t *d = hal_disp_fb_init();
@@ -1468,7 +1492,6 @@ int ui_run_x11(const char *dir, int device, int http_port){
     fmt_load();
     guard_load();
     hs_motor(false);   /* 清掉上次可能卡住的振动 */
-    kill_stale_aplay();   /* 清理上次进程遗留的播放 */
     if(http_port>0 && http_start(g_dir,http_port)==0) g_http_port=http_port;
     lv_init();
     lv_display_t *d=lv_x11_window_create("freE1 - 320x320",W,H);
