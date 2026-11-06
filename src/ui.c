@@ -181,7 +181,10 @@ static void perf_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; set_perf(!g_p
 static lv_obj_t *http_row_val, *storage_val;
 static int  g_http_port = 0;
 static int  g_fmt = 0;          /* 0 = 48k/24bit, 1 = 44.1k/16bit */
-static const int FMT_RATE[2] = {48000, 44100};
+/* 第二档只降位深、不降采样率：44.1 kHz 下 PDM 阵列的 ch6/ch7 恒为 0
+   （实测 48k 全部 8 路正常，44.1k 只有 ch0-5 有数据），定向模式会录成静音，
+   所以不提供 44.1k。 */
+static const int FMT_RATE[2] = {48000, 48000};
 static const int FMT_BITS[2] = {24, 16};
 static int  g_idle_min = 60;     /* 空闲多少秒后熄屏：30/60/90 */
 static double g_guard_free_gb = 0.2;  /* 满盘阈值（可被 guard.conf 覆盖，便于测试） */
@@ -234,9 +237,9 @@ static void fmt_cb(lv_event_t *e){
     if(!tap_ok()) return;
     if(engine_running()){ show_warn("Stop recording before changing format."); return; }
     g_fmt = !g_fmt;
-    if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "44.1k / 16bit" : "48k / 24bit");
+    if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "48k / 16bit" : "48k / 24bit");
     fmt_save();
-    logmsg("format -> %s", g_fmt? "44.1k/16bit" : "48k/24bit");
+    logmsg("format -> %s", g_fmt? "48k/16bit" : "48k/24bit");
 }
 
 static void idle_save(void){
@@ -949,7 +952,7 @@ static void build_settings_page(lv_obj_t *p){
     settings_box = mk_panel(p,0,26,W,276,0,C_BG);
     lv_obj_remove_flag(settings_box,LV_OBJ_FLAG_CLICKABLE);
     int y=0;
-    { lv_obj_t *fr=mk_row(settings_box,y, "Format", g_fmt? "44.1k / 16bit" : "48k / 24bit", C_TEXT, &fmt_val);
+    { lv_obj_t *fr=mk_row(settings_box,y, "Format", g_fmt? "48k / 16bit" : "48k / 24bit", C_TEXT, &fmt_val);
       lv_obj_add_flag(fr,LV_OBJ_FLAG_CLICKABLE);
       lv_obj_add_event_cb(fr,fmt_cb,LV_EVENT_CLICKED,NULL); y+=90; }
     { char b[16]; snprintf(b,sizeof b,"%d s",g_idle_min);
@@ -1062,7 +1065,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
     else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); logmsg("mode -> %d", input_mode); } }
     else if(!strncmp(b,"fmt ",4)){                        /* 设定录音格式 0=48k/24bit 1=44.1k/16bit */
-        int v=atoi(b+4); if(v==0 || v==1){ g_fmt=v; if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "44.1k / 16bit" : "48k / 24bit"); fmt_save(); logmsg("format -> %d", g_fmt); }
+        int v=atoi(b+4); if(v==0 || v==1){ g_fmt=v; if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "48k / 16bit" : "48k / 24bit"); fmt_save(); logmsg("format -> %d", g_fmt); }
     }
     else if(!strncmp(b,"stopkey",7)) rec_stop_all();      /* 等同 STOP 键 */
     else if(!strncmp(b,"geostop",7)){ if(g_geo_on) geo_stop(); set_rec_ui(0); }
