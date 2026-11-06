@@ -118,7 +118,7 @@ def bandpass(a, rate, f1, f2):
 
 
 # ---------------------------------------------------------------- 点播检测
-def click_onsets(x, rate, thr_db=-30.0, skip_s=0.1):
+def click_onsets(x, rate, thr_db=-30.0, skip_s=0.35):
     """返回每次点播的起始时刻（秒）。点播是短促宽带脉冲，包络跳变即可定位。"""
     hp = np.diff(x, axis=0, prepend=x[:1])          # 一阶差分压掉低频漂移
     mono = np.abs(hp).max(axis=1)
@@ -189,6 +189,37 @@ def segment_taus(x, rate, t0, t1, onsets, pre_s=0.002, post_s=0.020):
     return med, mad, np.median(pk, axis=0), len(windows)
 
 
+# ---------------------------------------------------------------- 绕圈幅度法
+def amplitude_distances(taus):
+    """声源绕设备转一圈时，τ_ij(t) ≈ (Δp·u(t))/c 是一条正弦；
+    它的幅度 (max−min)/2 就等于 |Δp_ij|/c，与声源放在哪些角度无关。
+    这比"四个方位两点差分"稳健得多：后者在摆放角度有偏差时会系统性低估间距。"""
+    n = max(max(k) for k in taus) + 1
+    D = np.zeros((n, n))
+    info = {}
+    for (i, j), v in taus.items():
+        if len(v) < 8:
+            continue
+        lo, hi = np.percentile(v, 2.5), np.percentile(v, 97.5)
+        D[i, j] = D[j, i] = (hi - lo) / 2.0 * C * 1e3        # mm
+        info[(i, j)] = (lo, hi, len(v))
+    return D, info
+
+
+def mds_coords(D, idx):
+    """经典 MDS：只用两两间距还原二维坐标（朝向/镜像未定）。"""
+    S = D[np.ix_(idx, idx)]
+    n = len(idx)
+    J = np.eye(n) - np.ones((n, n)) / n
+    B = -0.5 * J @ (S ** 2) @ J
+    w, V = np.linalg.eigh(B)
+    order = np.argsort(w)[::-1]
+    w, V = w[order], V[:, order]
+    coords = V[:, :2] * np.sqrt(np.maximum(w[:2], 0))
+    coords -= coords[0]
+    return coords
+
+
 # ---------------------------------------------------------------- 出图
 def draw_plot(pts, path, pad_mm=8.0):
     """把拟合出的坐标画成示意图（PIL，8 px/mm，+x 朝上=正前，+y 朝右=左）。"""
@@ -244,6 +275,8 @@ def main(argv):
     band = (1200.0, 10000.0)
     chans = None
     plot = None
+    angles = None
+    amplitude = False
     i = 2
     while i < len(argv):
         if argv[i] == '--save':
@@ -255,6 +288,12 @@ def main(argv):
         elif argv[i] == '--band':
             f1, f2 = argv[i + 1].split(',')
             band = (float(f1), float(f2))
+            i += 2
+        elif argv[i] == '--amplitude':
+            amplitude = True
+            i += 1
+        elif argv[i] == '--angles':
+            angles = [float(v) for v in argv[i + 1].split(',')]
             i += 2
         elif argv[i] == '--plot':
             plot = argv[i + 1]
@@ -286,7 +325,12 @@ def main(argv):
     out = {'file': path, 'rate': rate, 'channels': nch, 'segments': [], 'tdoa': {}}
     med = {}
     for idx, (s0, s1) in enumerate(segs):
-        name = DIRS[idx] if idx < len(DIRS) else f'seg{idx}'
+        if angles and idx < len(angles):
+            name = f'{angles[idx]:.0f}deg'
+        elif idx < len(DIRS):
+            name = DIRS[idx]
+        else:
+            name = f'seg{idx}'
         r = segment_taus(hp, rate, s0, s1, onsets)
         if r is None:
             print(f'[{name}] {s0:.2f}-{s1:.2f}s 无点播，跳过')
@@ -305,16 +349,77 @@ def main(argv):
         out['segments'].append({'name': name, 'start_s': s0, 'end_s': s1, 'clicks': cnt})
         out['tdoa'][name] = {'tau_s': m.tolist(), 'mad_s': mad.tolist(), 'clicks': cnt}
 
-    if not {'front', 'back', 'left', 'right'} <= set(med):
-        print('\n缺方向，跳过几何拟合。段顺序应为 正前 / 左 / 右 / 正后。')
+    names_done = [seg['name'] for seg in out['segments']]
+
+    if amplitude:
+        taus = {}
+        for ci in range(nch):
+            for cj in range(ci + 1, nch):
+                v = []
+                for t in onsets:
+                    a = int((t - 0.002) * rate)
+                    b = int((t + 0.020) * rate)
+                    if a < 0 or b > len(hp):
+                        continue
+                    w = hp[a:b]
+                    v.append(phat_tau(w[:, ci], w[:, cj], rate, 0.0012)[0])
+                taus[(ci, cj)] = np.array(v)
+        D, info = amplitude_distances(taus)
+        fit_ch = chans if chans else list(range(min(6, nch)))
+        print('\n绕圈幅度法（不依赖声源角度）两两间距 mm:')
+        print('      ' + ' '.join(f'ch{cj:<5}' for cj in range(nch)))
+        for ci in range(nch):
+            print(f'  ch{ci} ' + ' '.join(f'{D[ci, cj]:+6.1f}' for cj in range(nch)))
+        coords = mds_coords(D, fit_ch)
+        print('\nMDS 坐标（mm，ch0 原点，朝向未定）:')
+        for k, ci in enumerate(fit_ch):
+            print(f'  ch{ci}: ({coords[k, 0]:+7.1f}, {coords[k, 1]:+7.1f})  '
+                  f'|p|={np.linalg.norm(coords[k]):.1f}')
+        span = coords.max(axis=0) - coords.min(axis=0)
+        print(f'  张角: {span[0]:.1f} mm × {span[1]:.1f} mm')
+        resid = []
+        for a in range(len(fit_ch)):
+            for b in range(a + 1, len(fit_ch)):
+                resid.append(abs(np.linalg.norm(coords[a] - coords[b]) - D[fit_ch[a], fit_ch[b]]))
+        print(f'  距离复原残差中位数: {np.median(resid):.1f} mm')
+        if plot:
+            draw_plot({f'ch{c}': tuple(coords[k]) for k, c in enumerate(fit_ch)}, plot)
+            print(f'写入 {plot}')
+        if save:
+            out['amplitude_dist_mm'] = D.tolist()
+            out['mds_mm'] = {f'ch{c}': coords[k].tolist() for k, c in enumerate(fit_ch)}
+            json.dump(out, open(save, 'w'), indent=1)
+            print(f'写入 {save}')
         return
 
-    tf, tb = med['front'], med['back']
-    tl, tr = med['left'], med['right']
-    dx = (tf - tb) * C / 2.0          # c·τ = Δx·cosθ + Δy·sinθ（θ=0 前, 180 后）
-    dy = (tl - tr) * C / 2.0          # θ=90 左, 270 右
+    if angles:
+        # 每个方位一组方程 c·τ = Δx·cosθ + Δy·sinθ，逐对解 dx/dy（8 个方位即超定）
+        use = [(n, np.deg2rad(a)) for n, a in zip(names_done, angles) if n in med]
+        if len(use) < 2:
+            print('\n可用段不足，跳过几何拟合。')
+            return
+        dx = np.zeros((nch, nch))
+        dy = np.zeros((nch, nch))
+        for ci in range(nch):
+            for cj in range(ci + 1, nch):
+                G = np.array([[np.cos(th), np.sin(th)] for _, th in use])
+                rhs = np.array([C * med[n][ci, cj] for n, _ in use])
+                sol1, *_ = np.linalg.lstsq(G, rhs, rcond=None)
+                dx[ci, cj], dx[cj, ci] = sol1[0], -sol1[0]
+                dy[ci, cj], dy[cj, ci] = sol1[1], -sol1[1]
+        print(f'\n逐对最小二乘：{len(use)} 个方位, 角度 ' +
+              ' '.join(f'{np.rad2deg(th):.0f}°' for _, th in use))
+    else:
+        if not {'front', 'back', 'left', 'right'} <= set(med):
+            print('\n缺方向，跳过几何拟合。段顺序应为 正前 / 左 / 右 / 正后，'
+                  '或用 --angles 指定每个方位角。')
+            return
+        tf, tb = med['front'], med['back']
+        tl, tr = med['left'], med['right']
+        dx = (tf - tb) * C / 2.0      # c·τ = Δx·cosθ + Δy·sinθ（θ=0 前, 180 后）
+        dy = (tl - tr) * C / 2.0      # θ=90 左, 270 右
 
-    worst = max(np.max(np.median(out['tdoa'][k]['mad_s'], axis=0)) for k in DIRS)
+    worst = max(np.max(np.median(out['tdoa'][k]['mad_s'], axis=0)) for k in names_done)
     print(f'\n通道对时延离散度（四段 MAD 的最大中位数）: {worst * 1e6:.1f} µs '
           f'≈ {worst * C * 1e3:.1f} mm')
 
@@ -375,13 +480,13 @@ def main(argv):
           + (', '.join(f'ch{rows[r][0]}-ch{rows[r][1]}({w[r]:.2f})'
                        for r in range(len(rows)) if w[r] < 0.5) or '无') + '）')
     if len(fit_ch) < nch:
-        print('  未参与拟合的通道（此处只打印原始 TDOA，不做坐标）:')
+        print('  未参与拟合的通道（只列相对 ch0 的 TDOA）:')
         for ci in range(nch):
             if ci in fit_ch:
                 continue
-            print(f'    ch{ci}: 正前 {tf[0, ci] * 1e6:+6.0f} µs, 左 {tl[0, ci] * 1e6:+6.0f} µs, '
-                  f'右 {tr[0, ci] * 1e6:+6.0f} µs, 正后 {tb[0, ci] * 1e6:+6.0f} µs '
-                  f'(相对 ch0)')
+            cells = ' '.join(f'{n}={med[n][0, ci] * 1e6:+5.0f}µs'
+                             for n in names_done if n in med)
+            print(f'    ch{ci}: {cells}')
     out['positions_mm'] = {f'ch{c}': (sol[k] * 1e3).tolist() for k, c in enumerate(fit_ch)}
     out['fit_channels'] = fit_ch
     out['pair_weight'] = {f'ch{rows[r][0]}-ch{rows[r][1]}': float(w[r]) for r in range(len(rows))}
