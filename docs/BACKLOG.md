@@ -11,6 +11,7 @@ someone at the device).
 | Item | Status | Notes |
 |---|---|---|
 | Monitor path (record → headphone) | **implemented, pending listening check** | Src/audio path done; 10 s recording with monitor showed 0 underruns / 0 drops. Needs a headphone listening check tonight. |
+| Mark / bookmark from the MARK key | idea | The MARK key is freed up (it no longer flips pages) but does nothing yet. Needs somewhere to record marks (sidecar file per segment) and a way to jump to them while playing back. |
 | VAD (voice-activated recording) | idea | Threshold tuning needs a real room. |
 | Gain presets (meeting / interview / music) | idea | AGC is currently a single fixed profile. |
 | Manual gain + AGC on/off | idea | Expose the AGC parameters that are already in `rec.c`. |
