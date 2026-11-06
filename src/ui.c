@@ -704,9 +704,14 @@ static void ui_open_wifi(void){
    不 exec（否则退出要走重启流程、还会闪回原厂画面），改为：让出显示 → 子进程跑 → 收回并重绘。 */
 static pid_t g_hw_pid = -1;
 static int   g_hw_return_page = -1;
-static void hwtest_row_cb(lv_event_t *e){
-    (void)e;
-    if(!tap_ok() || g_hw_pid > 0) return;
+static void hwtest_start(void){
+    if(g_hw_pid > 0) return;
+    if(engine_running()){                          /* 录音中禁止进硬件测试（会抢 PDM/codec） */
+        show_warn("Stop recording before hardware test.");
+        logmsg("hwtest: refused (recording)");
+        return;
+    }
+    if(play_is_active()){ play_stop(); g_play_file[0] = 0; }   /* 先停回放，避免抢 codec */
     sync();
     g_hw_return_page = page_idx;                   /* 记住当前页，回来还在这 */
     hal_set_touch_enabled(0);                      /* 测试期间 freE1 不处理触摸 */
@@ -724,6 +729,7 @@ static void hwtest_row_cb(lv_event_t *e){
         logmsg("hwtest: fork failed");
     }
 }
+static void hwtest_row_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; hwtest_start(); }
 
 static void wifi_row_cb(lv_event_t *e){ (void)e; ui_open_wifi(); }
 
@@ -809,6 +815,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"pwr",3)){ ui_on_hw_key(7,1); lv_timer_t *t=lv_timer_create(pwr_relay_cb,120,NULL); lv_timer_set_repeat_count(t,1); }
     else if(!strncmp(b,"play ",5)){ play_stop(); play_file(b+5); }
     else if(!strncmp(b,"pstop",5)){ play_stop(); logmsg("play: stopped (cmd)"); }
+    else if(!strncmp(b,"hwt",3)){ hwtest_start(); }
     else if(!strncmp(b,"ppause",6)){ play_toggle_pause(); logmsg("play: toggle pause (cmd)"); }
     else if(!strncmp(b,"pseek ",6)){ play_seek_ms(atoll(b+6)); logmsg("play: seek %s ms (cmd)", b+6); }
     else if(!strncmp(b,"httpoff",7)){ logmsg("test: http_stop begin"); http_stop(); logmsg("test: http_stop done"); }
