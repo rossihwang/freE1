@@ -523,6 +523,7 @@ static void monitor_refresh(void){
 
 static void monitor_btn_cb(lv_event_t *e){
     (void)e;
+    logmsg("mon: tap (drag=%d)", hal_input_last_drag());
     if(!tap_ok()) return;
     ui_activity();
     monitor_toggle();
@@ -641,8 +642,8 @@ static void build_record_page(lv_obj_t *p){
 
     /* 监听开关（仅插耳机可用）：模式 chip 右侧 */
     monitor_btn = lv_button_create(p);
-    lv_obj_set_size(monitor_btn,64,32);
-    lv_obj_align(monitor_btn,LV_ALIGN_TOP_MID,127,56);
+    lv_obj_set_size(monitor_btn,76,34);
+    lv_obj_align(monitor_btn,LV_ALIGN_TOP_MID,92,55);   /* 留出右边距，别贴边被裁 */
     lv_obj_set_style_radius(monitor_btn,12,0);
     lv_obj_set_style_bg_color(monitor_btn,lv_color_hex(C_PANEL),0);
     lv_obj_set_style_shadow_width(monitor_btn,0,0);
