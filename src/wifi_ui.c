@@ -128,7 +128,7 @@ static void t9_refresh_keys(void){
     }
     if(t9_lbls[9])  lv_label_set_text(t9_lbls[9],  t9_mode==0?"abc":(t9_mode==1?"ABC":"123"));
     if(t9_lbls[10]) lv_label_set_text(t9_lbls[10], (t9_mode==0)?"0":"space");
-    if(t9_lbls[11]) lv_label_set_text(t9_lbls[11], "< del");
+    if(t9_lbls[11]) lv_label_set_text(t9_lbls[11], "del");
 }
 
 static void t9_insert(char c){
