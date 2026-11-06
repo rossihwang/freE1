@@ -324,8 +324,7 @@ static lv_obj_t *g_row_fill = NULL;      /* 播放中那一行的背景进度条
 static int g_row_fill_pct = -1;
 #define ROW_W     304
 static void play_file(const char *name);
-static void transport_update(const play_state_t *ps);
-static void transport_build(lv_obj_t *parent);
+static void files_progress_update(const play_state_t *ps);
 static lv_group_t *g_group;
 static void key_cb(lv_event_t *e){
     uint32_t k = lv_event_get_key(e);
@@ -373,7 +372,7 @@ static void add_back_btn(lv_obj_t *p){
 }
 static void show_page(int p){
     logmsg("page -> %d (+%lld ms)", p, (long long)(mono_ms() - g_start_ms));
-    if(p != 1 && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (page change)"); }
+    if(p != 1 && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (page change)"); }   /* 无底部栏：离开文件页 = 停止 */
     if(p != 0 && g_start_ms && (mono_ms() - g_start_ms) < 800){
         logmsg("page: ignored (startup window)");
         return;
@@ -712,10 +711,6 @@ static void build_record_page(lv_obj_t *p){
 
 static void del_row_cb(lv_event_t *e);
 static void play_row_cb(lv_event_t *e);
-static lv_obj_t *transport_bar, *transport_time, *transport_slider, *transport_btn_lbl;
-static int transport_dragging = 0;
-static int64_t transport_drag_ms = -1;
-static int transport_last_pct = -1;
 
 typedef struct { char name[192]; long size; double dur; long mt; } finfo;
 static int finfo_cmp(const void *a, const void *b){
@@ -832,9 +827,9 @@ static void build_files_page(lv_obj_t *p){
     lv_obj_align(t,LV_ALIGN_TOP_MID,0,10);
     files_hdr = mk_label(p,"",&lv_font_montserrat_14,C_RED);
     lv_obj_align(files_hdr,LV_ALIGN_TOP_RIGHT,-10,10);
-    files_box = mk_panel(p,0,26,W,220,0,C_BG);
+    files_box = mk_panel(p,0,26,W,276,0,C_BG);   /* 不再留底部控制栏的空间 */
     lv_obj_remove_flag(files_box,LV_OBJ_FLAG_CLICKABLE);
-    transport_build(p);
+    /* 底部控制栏已去掉：播放/暂停靠点行本身，换页即停止播放 */
     files_refresh();
 }
 
@@ -1120,7 +1115,7 @@ static void ui_tick(lv_timer_t *t){
     { static int was_active = 0;
       if(was_active && !ps.active && page_idx == 1) files_refresh();   /* 播完：清掉行高亮 */
       was_active = ps.active; }
-    transport_update(&ps);
+    files_progress_update(&ps);
     if(g_geo_on){
         /* 8 通道原始采集：数据不经过本进程，只能显示计时，别画假的电平/波形 */
         if(g_geo_pid > 0 && waitpid(g_geo_pid, NULL, WNOHANG) == g_geo_pid){
@@ -1409,104 +1404,10 @@ static void del_ok_cb(lv_event_t *e){
     del_dlg_close(); files_refresh();
 }
 /* ---------- 播放：进程内 ALSA，底部播放条 ---------- */
-static void transport_show(int on){
-    if(!transport_bar) return;
-    if(on) lv_obj_remove_flag(transport_bar, LV_OBJ_FLAG_HIDDEN);
-    else   lv_obj_add_flag(transport_bar, LV_OBJ_FLAG_HIDDEN);
-    if(files_box) lv_obj_set_height(files_box, on ? 220 : 276);   /* 让出/归还空间 */
-}
-
-static void transport_btn_cb(lv_event_t *e){
-    (void)e;
-    if(!tap_ok()) return;
-    play_toggle_pause();
-}
-static void transport_stop_cb(lv_event_t *e){
-    (void)e;
-    play_stop();
-    g_play_file[0] = 0;
-    if(page_idx == 1) files_refresh();
-    logmsg("play: stopped");
-}
-static void transport_slider_cb(lv_event_t *e){
-    lv_event_code_t code = lv_event_get_code(e);
-    lv_obj_t *sl = lv_event_get_target(e);
-    int v = (int)lv_slider_get_value(sl);
-    play_state_t ps; play_get_state(&ps);
-    if(code == LV_EVENT_PRESSED || code == LV_EVENT_VALUE_CHANGED){
-        transport_dragging = 1;
-        if(ps.total_ms > 0){
-            transport_drag_ms = (int64_t)v * ps.total_ms / 100;
-            if(transport_time){                       /* 拖动时预览目标时间 */
-                char b[32];
-                snprintf(b, sizeof b, "%lld:%02lld / %lld:%02lld",
-                         (long long)(transport_drag_ms / 60000), (long long)(transport_drag_ms / 1000 % 60),
-                         (long long)(ps.total_ms / 60000), (long long)(ps.total_ms / 1000 % 60));
-                lv_label_set_text(transport_time, b);
-            }
-        }
-    }
-    if(code == LV_EVENT_RELEASED){
-        if(transport_drag_ms >= 0) play_seek_ms(transport_drag_ms);
-        transport_dragging = 0;
-        transport_drag_ms = -1;
-    }
-}
-
-static void transport_build(lv_obj_t *parent){
-    transport_bar = mk_panel(parent, 0, 246, W, 56, 0, C_PANEL);
-    lv_obj_remove_flag(transport_bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *btn = lv_button_create(transport_bar);
-    lv_obj_set_size(btn, 44, 44);
-    lv_obj_align(btn, LV_ALIGN_LEFT_MID, 6, 0);
-    lv_obj_set_style_radius(btn, 22, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(C_GREEN), 0);
-    lv_obj_set_style_shadow_width(btn, 0, 0);
-    transport_btn_lbl = mk_label(btn, "II", &lv_font_montserrat_20, C_BG);
-    lv_obj_center(transport_btn_lbl);
-    lv_obj_add_event_cb(btn, transport_btn_cb, LV_EVENT_CLICKED, NULL);
-
-    transport_slider = lv_slider_create(transport_bar);
-    lv_obj_set_size(transport_slider, 160, 6);
-    lv_obj_align(transport_slider, LV_ALIGN_LEFT_MID, 58, -8);
-    lv_slider_set_range(transport_slider, 0, 100);
-    lv_obj_set_style_bg_color(transport_slider, lv_color_hex(0x2E7D50), LV_PART_MAIN);
-    lv_obj_set_style_bg_color(transport_slider, lv_color_hex(C_GREEN), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(transport_slider, lv_color_hex(C_GREEN), LV_PART_KNOB);
-    lv_obj_add_event_cb(transport_slider, transport_slider_cb, LV_EVENT_ALL, NULL);
-
-    transport_time = mk_label(transport_bar, "0:00 / 0:00", &lv_font_montserrat_14, C_DIM);
-    lv_obj_align(transport_time, LV_ALIGN_LEFT_MID, 58, 16);
-
-    lv_obj_t *x = lv_button_create(transport_bar);
-    lv_obj_set_size(x, 40, 40);
-    lv_obj_align(x, LV_ALIGN_RIGHT_MID, -6, 0);
-    lv_obj_set_style_radius(x, 20, 0);
-    lv_obj_set_style_bg_color(x, lv_color_hex(0x3A1F1F), 0);
-    lv_obj_set_style_shadow_width(x, 0, 0);
-    lv_obj_t *xl = mk_label(x, "X", &lv_font_montserrat_20, C_RED);
-    lv_obj_center(xl);
-    lv_obj_add_event_cb(x, transport_stop_cb, LV_EVENT_CLICKED, NULL);
-
-    transport_show(0);
-}
-
-static void transport_update(const play_state_t *ps){
-    if(!transport_bar) return;
-    transport_show(ps->active ? 1 : 0);
-    if(!ps->active) return;
-    if(transport_btn_lbl) lv_label_set_text(transport_btn_lbl, ps->paused ? ">" : "II");
-    if(transport_dragging) return;          /* 拖动时不回写，避免打架 */
-    if(ps->total_ms > 0){
-        int pct = (int)(ps->pos_ms * 100 / ps->total_ms);
-        if(pct < 0) pct = 0; if(pct > 100) pct = 100;
-        if(pct != transport_last_pct){
-            transport_last_pct = pct;
-            lv_slider_set_value(transport_slider, pct, LV_ANIM_OFF);
-        }
-    }
-    if(g_row_fill && ps->total_ms > 0){
+/* 行内背景进度条：没有底部控制栏，进度只在被播放的那一行上体现 */
+static void files_progress_update(const play_state_t *ps){
+    if(!g_row_fill) return;
+    if(ps->active && ps->total_ms > 0){
         int p = (int)(ps->pos_ms * 100 / ps->total_ms);
         if(p < 0) p = 0; if(p > 100) p = 100;
         if(p != g_row_fill_pct){
@@ -1514,13 +1415,6 @@ static void transport_update(const play_state_t *ps){
             int w = ROW_W * p / 100;
             lv_obj_set_width(g_row_fill, w < 4 ? 4 : w);
         }
-    }
-    if(transport_time){
-        char b[32];
-        snprintf(b, sizeof b, "%lld:%02lld / %lld:%02lld",
-                 (long long)(ps->pos_ms / 60000), (long long)(ps->pos_ms / 1000 % 60),
-                 (long long)(ps->total_ms / 60000), (long long)(ps->total_ms / 1000 % 60));
-        lv_label_set_text(transport_time, b);
     }
 }
 
@@ -1532,7 +1426,7 @@ static void play_file(const char *name){
     }
     if(play_open(g_dir, name) != 0) return;
     snprintf(g_play_file, sizeof g_play_file, "%s", name);
-    transport_last_pct = -1;
+    g_row_fill_pct = -1;
     logmsg("play: %s", name);
     if(page_idx == 1) files_refresh();
 }
