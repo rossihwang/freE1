@@ -42,6 +42,22 @@ int monitor_open(uint32_t rate)
         snd_pcm_close(pcm);
         return -1;
     }
+    /* 起播阈值：默认是 1 个 period（21 ms），一开始只有这么点数据就开始播，
+       头一百毫秒必然欠载（听着就是开头"咔/糊"）。设成 4096 帧（85 ms）再起播，
+       既垫够了抗抖动的量，又不会像"填满整个 341 ms 缓冲"那样把监听延迟拉太长。 */
+    {
+        snd_pcm_sw_params_t *sw;
+        snd_pcm_sw_params_alloca(&sw);
+        snd_pcm_sw_params_current(pcm, sw);
+        snd_pcm_uframes_t gbuf = 0;
+        snd_pcm_hw_params_get_buffer_size(hw, &gbuf);
+        snd_pcm_uframes_t st = 4096;
+        if(gbuf > 0 && st > gbuf) st = gbuf;
+        snd_pcm_sw_params_set_start_threshold(pcm, sw, st);
+        snd_pcm_sw_params_set_avail_min(pcm, sw, period);
+        if(snd_pcm_sw_params(pcm, sw) < 0) logmsg("monitor: sw_params failed");
+        else logmsg("monitor: start threshold %lu frames", (unsigned long)st);
+    }
     snd_pcm_prepare(pcm);
     g_pcm = pcm;
     g_open = 1;
