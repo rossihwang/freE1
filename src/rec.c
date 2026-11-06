@@ -151,10 +151,22 @@ int rec_run(rec_cfg *cfg){
         logmsg("segment start: %s",path);
 
         int64_t seg_ms = mono_ms();
+        int64_t paused_at = 0;
+        int paused = 0;
         int64_t last_save = 0; int tick_n = 0;
         while(!*cfg->stop){
             int got=a->read(a->ctx,inbuf,CHUNK);
             if(got<=0){ logmsg("audio read failed - aborting recorder"); failed=1; break; }
+            /* 暂停：管道照样读空（否则 ALSA 缓冲会撑爆），但既不落盘也不计时 */
+            if(st && st->paused){
+                if(!paused){ paused = 1; paused_at = mono_ms(); logmsg("recorder paused"); }
+                continue;
+            }
+            if(paused){
+                paused = 0;
+                seg_ms += mono_ms() - paused_at;   /* 暂停时长不能算进分段时长 */
+                logmsg("recorder resumed");
+            }
             if(cfg->omni){
                 int mix_map[2] = {0,1};
                 for(int i=0;i<got;i++){

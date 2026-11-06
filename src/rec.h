@@ -5,6 +5,7 @@ typedef struct {
     volatile int running;
     volatile int recording;
     volatile int failed;
+    volatile int paused;        /* 1 = 暂停：继续读管道但不落盘 */
     volatile int levels[8];     /* 0..100 */
     volatile int db_dbfs;       /* -72..0 */
     volatile unsigned long long frames;

@@ -39,4 +39,5 @@ void engine_stop(void){
     if(g_threaded){ pthread_join(g_th,NULL); g_threaded=0; }
 }
 int engine_running(void){ return g_st.running; }
+void engine_pause(int on){ if(g_st.running) g_st.paused = on ? 1 : 0; }
 rec_status *engine_status(void){ return &g_st; }
