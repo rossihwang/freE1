@@ -176,6 +176,7 @@ static const int FMT_BITS[2] = {24, 16};
 static int  g_idle_min = 60;     /* 空闲多少秒后熄屏：30/60/90 */
 static double g_guard_free_gb = 0.2;  /* 满盘阈值（可被 guard.conf 覆盖，便于测试） */
 static int    g_guard_batt    = 5;   /* 低电阈值 */
+static int    g_batt_level_shown = 0;  /* 已提示到哪一级：20/10/5 */
 static int    g_guard_ignore_chg = 0; /* 测试用：忽略充电状态 */
 static lv_obj_t *idle_val = NULL;
 #define IDLE_OPTS 3
@@ -911,8 +912,27 @@ static void ui_tick(lv_timer_t *t){
                   char b[32];
                   snprintf(b,sizeof b,"%d%%%s%s",cap, charging?"+":"", hp==1?"  HP":"");
                   lv_label_set_text(batt_lbl,b);
-                  lv_obj_set_style_text_color(batt_lbl,lv_color_hex(cap<10?C_RED:C_DIM),0);
+                  uint32_t bc = cap<=10 ? C_RED : (cap<=20 ? 0xFFC400 : C_DIM);
+                  lv_obj_set_style_text_color(batt_lbl,lv_color_hex(bc),0);
               }
+          }
+          /* 分级提示：20% 变色（上面已做）、10% 弹一次窗、2% 自动关机 */
+          if(cap >= 0 && !charging){
+              if(cap <= 20 && g_batt_level_shown < 20){ g_batt_level_shown = 20; logmsg("battery: %d%%", cap); }
+              if(cap <= 10 && g_batt_level_shown < 10){
+                  g_batt_level_shown = 10;
+                  show_warn("Battery low (10%). Recording will stop at 5%.");
+                  logmsg("battery: 10%% warning");
+              }
+              if(cap <= 2 && g_batt_level_shown < 2){
+                  g_batt_level_shown = 2;
+                  logmsg("battery: 2%%, powering off");
+                  if(engine_running()) engine_stop();
+                  sync();
+                  system("poweroff");
+              }
+          } else if(cap > 25) {
+              g_batt_level_shown = 0;   /* 充电回升后重置 */
           }
           if(files_hdr) lv_label_set_text(files_hdr, engine_running()?"REC":"");
           { static int n=0; if(++n % 5 == 0){ int a = adb_running(); if(a != g_adb_on){ g_adb_on = a; adb_set_value(a); } } }
