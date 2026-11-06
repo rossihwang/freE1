@@ -232,6 +232,17 @@ static void fmt_load(void){
     int v=0; if(fscanf(f,"%d",&v)==1 && (v==0||v==1)) g_fmt=v;
     fclose(f);
 }
+static void mode_save(void){
+    char path[512]; snprintf(path,sizeof path,"%s/input_mode", g_dir);
+    FILE *f=fopen(path,"w"); if(f){ fprintf(f,"%d\n", input_mode); fclose(f); fflush(f); }
+}
+static void mode_load(void){
+    char path[512]; snprintf(path,sizeof path,"%s/input_mode", g_dir);
+    FILE *f=fopen(path,"r"); if(!f) return;
+    int v=0; if(fscanf(f,"%d",&v)==1 && (v==0||v==1)) input_mode=v;
+    fclose(f);
+}
+
 static void fmt_cb(lv_event_t *e){
     (void)e;
     if(!tap_ok()) return;
@@ -592,6 +603,7 @@ static void mode_cb(lv_event_t *e){
     if(g_geo_on) return;            /* 原始 8 通道采集由 PDM 阵列直接出流，模式无意义 */
     input_mode = !input_mode;
     apply_mode();
+    mode_save();
 }
 
 /* 自己实现滑动手势：按下记点，松开算位移。鼠标/触摸都适用，阈值 30 px。 */
@@ -1063,10 +1075,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
-    else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); logmsg("mode -> %d", input_mode); } }
-    else if(!strncmp(b,"fmt ",4)){                        /* 设定录音格式 0=48k/24bit 1=44.1k/16bit */
-        int v=atoi(b+4); if(v==0 || v==1){ g_fmt=v; if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "48k / 16bit" : "48k / 24bit"); fmt_save(); logmsg("format -> %d", g_fmt); }
-    }
+    else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); mode_save(); logmsg("mode -> %d", input_mode); } }
     else if(!strncmp(b,"stopkey",7)) rec_stop_all();      /* 等同 STOP 键 */
     else if(!strncmp(b,"geostop",7)){ if(g_geo_on) geo_stop(); set_rec_ui(0); }
     else if(!strncmp(b,"geo",3)){
@@ -1663,6 +1672,7 @@ int ui_run_device(const char *dir, int http_port){
     { int n=rec_recover(g_dir); if(n) logmsg("startup: recovered %d file(s)",n); }
     idle_load();
     fmt_load();
+    mode_load();
     guard_load();
     hs_motor(false);   /* 清掉上次可能卡住的振动 */
     hs_audio_route(hs_hp_inserted());   /* 耳机/扬声器路由（驱动可能把 HPOUT 留在 0） */
