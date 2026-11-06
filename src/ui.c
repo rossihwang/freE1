@@ -63,6 +63,7 @@ static lv_obj_t *pages[NPAGES];
 static lv_obj_t *g_stack[MAXSTACK];
 static int g_depth = 0;
 static lv_obj_t *timer_lbl, *state_lbl, *dbfs_lbl, *mode_lbl;
+static lv_obj_t *g_mode_btn;      /* 拾音模式胶囊（原始 8 通道采集期间要禁用） */
 static lv_obj_t *batt_lbl, *stor_lbl, *files_hdr, *clock_lbl;
 static lv_obj_t *viz_omni, *viz_top;
 static lv_obj_t *bars[6];
@@ -404,6 +405,7 @@ static void set_rec_ui(int on){
             lv_obj_add_flag(chart, LV_OBJ_FLAG_HIDDEN);   /* 待机不留一条平线 */
         }
         if(dbfs_lbl) lv_label_set_text(dbfs_lbl, "-- dBFS");
+        if(g_mode_btn){ lv_obj_add_flag(g_mode_btn, LV_OBJ_FLAG_CLICKABLE); apply_mode(); }
     } else if(chart){
         lv_obj_remove_flag(chart, LV_OBJ_FLAG_HIDDEN);
     }
@@ -580,6 +582,7 @@ static void build_record_page(lv_obj_t *p){
     lv_obj_set_style_shadow_width(mb,0,0);
     lv_obj_set_style_border_width(mb,1,0);
     lv_obj_set_style_border_color(mb,lv_color_hex(C_LINE),0);
+    g_mode_btn = mb;
     mode_lbl = mk_label(mb,"DIRECTIONAL",&lv_font_montserrat_14,C_GREEN);
     lv_obj_center(mode_lbl);
     lv_obj_add_event_cb(mb,mode_cb,LV_EVENT_CLICKED,NULL);
@@ -819,6 +822,8 @@ static void geo_start(int secs){
         lv_label_set_text(state_lbl, "RAW 8CH");
         lv_obj_set_style_text_color(state_lbl, lv_color_hex(C_RED), 0);
         if(chart) lv_obj_add_flag(chart, LV_OBJ_FLAG_HIDDEN);
+        /* 原始采集固定拿全部 8 路麦克风，拾音模式开关在这一模式下没有意义 */
+        if(g_mode_btn){ lv_obj_remove_flag(g_mode_btn, LV_OBJ_FLAG_CLICKABLE); lv_label_set_text(mode_lbl, "8 MIC ARRAY"); }
         rec_sec = 0;
         ui_activity();
         logmsg("geo: started pid %d, %d s -> /mnt/sdcard/geo/geo.wav", (int)p, secs);
