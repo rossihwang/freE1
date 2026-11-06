@@ -153,42 +153,65 @@ int rec_run(rec_cfg *cfg){
         int64_t seg_ms = mono_ms();
         int64_t paused_at = 0;
         int paused = 0;
+        int fade_in = 0;
+        int32_t last_out[2] = {0,0};
+        int map2[2] = {0,1};
         int64_t last_save = 0; int tick_n = 0;
         while(!*cfg->stop){
             int got=a->read(a->ctx,inbuf,CHUNK);
             if(got<=0){ logmsg("audio read failed - aborting recorder"); failed=1; break; }
             /* 暂停：管道照样读空（否则 ALSA 缓冲会撑爆），但既不落盘也不计时 */
             if(st && st->paused){
-                if(!paused){ paused = 1; paused_at = mono_ms(); logmsg("recorder paused"); }
+                if(!paused){
+                    paused = 1; paused_at = mono_ms();
+                    /* 直接停写会让波形在中间被截断，恢复后就是一声"啪"（实测冲到 -0.9 dBFS）。
+                       补 5 ms 从最后一个样本淡到 0，拼接口就听不出来了。 */
+                    int nf = (int)(0.005 * cfg->rate); if(nf < 8) nf = 8; if(nf > 512) nf = 512;
+                    int mm2[2] = {0,1};
+                    for(int i=0;i<nf;i++){
+                        double g = 1.0 - (double)i / nf;
+                        mixbuf[2*i]   = (int32_t)(last_out[0] * g);
+                        mixbuf[2*i+1] = (int32_t)(last_out[1] * g);
+                    }
+                    if(wav_append(&w, mixbuf, nf, 2, mm2) == 0){ total_frames += nf; s.frames += nf; }
+                    logmsg("recorder paused");
+                }
                 continue;
             }
             if(paused){
                 paused = 0;
                 seg_ms += mono_ms() - paused_at;   /* 暂停时长不能算进分段时长 */
+                fade_in = (int)(0.005 * cfg->rate); if(fade_in < 8) fade_in = 8; if(fade_in > 512) fade_in = 512;
                 logmsg("recorder resumed");
             }
+            /* 先把两种拾音模式都收敛到 mixbuf（2 通道），后面只用一条落盘路径 */
             if(cfg->omni){
-                int mix_map[2] = {0,1};
                 for(int i=0;i<got;i++){
                     const int32_t *f=&inbuf[(size_t)i*cfg->nch_in];
                     mixbuf[2*i]   = (f[5]+f[2]+f[0])/3;
                     mixbuf[2*i+1] = (f[4]+f[3]+f[1])/3;
                 }
-                agc_process(mixbuf, got, 2, mix_map, &proc);
-                if(monitor_is_open()) monitor_write(mixbuf, (uint32_t)got);
-                if(wav_append(&w,mixbuf,got,2,mix_map)!=0) break;
+                agc_process(mixbuf, got, 2, map2, &proc);
             } else {
                 agc_process(inbuf, got, cfg->nch_in, map, &proc);
-                if(monitor_is_open()){
-                    int mm[2] = {0,1};
-                    for(int i2=0;i2<got;i2++){
-                        mixbuf[2*i2]   = inbuf[(size_t)i2*cfg->nch_in + map[0]];
-                        mixbuf[2*i2+1] = inbuf[(size_t)i2*cfg->nch_in + map[1]];
-                    }
-                    monitor_write(mixbuf, (uint32_t)got);
+                for(int i2=0;i2<got;i2++){
+                    mixbuf[2*i2]   = inbuf[(size_t)i2*cfg->nch_in + map[0]];
+                    mixbuf[2*i2+1] = inbuf[(size_t)i2*cfg->nch_in + map[1]];
                 }
-                if(wav_append(&w,inbuf,got,cfg->nch_in,map)!=0) break;
             }
+            /* 恢复后淡入，避免从 0 直接跳到满幅 */
+            if(fade_in > 0){
+                int n = fade_in < got ? fade_in : got;
+                for(int i=0;i<n;i++){
+                    double g = (double)i / fade_in;
+                    mixbuf[2*i]   = (int32_t)(mixbuf[2*i] * g);
+                    mixbuf[2*i+1] = (int32_t)(mixbuf[2*i+1] * g);
+                }
+                fade_in = 0;
+            }
+            if(monitor_is_open()) monitor_write(mixbuf, (uint32_t)got);
+            if(wav_append(&w,mixbuf,got,2,map2)!=0) break;
+            if(got > 0){ last_out[0] = mixbuf[2*(got-1)]; last_out[1] = mixbuf[2*(got-1)+1]; }
             total_frames+=got; s.frames+=got;
             if(st){
                 for(int c=0;c<cfg->nch_in;c++){
