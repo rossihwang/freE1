@@ -1038,6 +1038,9 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
+    else if(!strncmp(b,"fmt ",4)){                        /* 设定录音格式 0=48k/24bit 1=44.1k/16bit */
+        int v=atoi(b+4); if(v==0 || v==1){ g_fmt=v; if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "44.1k / 16bit" : "48k / 24bit"); fmt_save(); logmsg("format -> %d", g_fmt); }
+    }
     else if(!strncmp(b,"stopkey",7)) rec_stop_all();      /* 等同 STOP 键 */
     else if(!strncmp(b,"geostop",7)){ if(g_geo_on) geo_stop(); set_rec_ui(0); }
     else if(!strncmp(b,"geo",3)){
