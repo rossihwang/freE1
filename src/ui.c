@@ -117,7 +117,43 @@ static char g_dir[400] = "recordings";
 static int  g_device = 0;
 static lv_obj_t *files_box;
 static lv_obj_t *settings_box;
-static lv_obj_t *storage_val, *http_val, *perf_val, *fmt_val;
+static lv_obj_t *storage_val, *http_val, *perf_val, *fmt_val, *adb_val;
+static int g_adb_on = -1;
+
+static int adb_running(void){
+    DIR *d = opendir("/proc");
+    if(!d) return 0;
+    int found = 0;
+    struct dirent *e;
+    while((e = readdir(d))){
+        if(e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+        char p[64]; snprintf(p,sizeof p,"/proc/%s/comm", e->d_name);
+        FILE *f = fopen(p,"r"); if(!f) continue;
+        char nm[32] = {0};
+        if(fgets(nm,sizeof nm,f) && !strncmp(nm,"adbd",4)) found = 1;
+        fclose(f);
+        if(found) break;
+    }
+    closedir(d);
+    return found;
+}
+
+static void adb_set_value(int on){
+    if(!adb_val) return;
+    lv_label_set_text(adb_val, on ? "ON" : "OFF");
+    lv_obj_set_style_text_color(adb_val, lv_color_hex(on ? C_GREEN : C_DIM), 0);
+}
+
+static void adb_cb(lv_event_t *e){
+    (void)e;
+    if(!tap_ok()) return;
+    int on = adb_running();
+    if(on){ system("killall -9 adbd >/dev/null 2>&1"); logmsg("adb: stopped"); }
+    else  { system("/usr/bin/adbd >/dev/null 2>&1 &"); logmsg("adb: started"); }
+    usleep(300000);
+    g_adb_on = adb_running();
+    adb_set_value(g_adb_on);
+}
 static int g_perf_on = 0;
 
 static void set_perf(int on){
@@ -727,6 +763,11 @@ static void build_settings_page(lv_obj_t *p){
     }
     lv_obj_add_flag(hr,LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(hr,http_toggle_cb,LV_EVENT_CLICKED,NULL); y+=90;
+    g_adb_on = adb_running();
+    { lv_obj_t *ar=mk_row(settings_box,y,"ADB", g_adb_on?"ON":"OFF",
+                          g_adb_on?C_GREEN:C_DIM, &adb_val);
+      lv_obj_add_flag(ar,LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_add_event_cb(ar,adb_cb,LV_EVENT_CLICKED,NULL); y+=90; }
     lv_obj_t *pr=mk_row(settings_box,y,"Performance mode", g_perf_on?"ON":"OFF",
                         g_perf_on?C_GREEN:C_DIM, &perf_val);
     lv_obj_add_flag(pr,LV_OBJ_FLAG_CLICKABLE);
@@ -806,6 +847,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"blank",5)) screen_set(0);
     else if(!strncmp(b,"scroll ",7)) wifi_ui_scroll(atoi(b+7));
     else if(!strncmp(b,"scrolls ",8)){ if(settings_box) lv_obj_scroll_by(settings_box,0,-atoi(b+8),LV_ANIM_OFF); }
+    else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
     else if(!strncmp(b,"power",5)) show_power_dialog();
     else if(!strncmp(b,"closep",6)) power_dlg_close();
@@ -831,7 +873,7 @@ static void ui_tick(lv_timer_t *t){
             g_off_at = mono_ms();
             logmsg("idle: screen off%s", engine_running() ? " (recording, no suspend)" : "");
         } else if(!g_screen_on && g_off_at && !engine_running()
-                  && !hs_battery_charging()          /* 充电时不休眠（插电没有省电意义） */
+                  && !hs_usb_online() && !hs_battery_charging()   /* 插着 USB 就不休眠 */
                   && (mono_ms() - g_off_at) > (int64_t)g_sleep_after*1000){
             g_off_at = 0;                    /* 先清，避免醒来后立刻再睡 */
             do_suspend();
@@ -903,6 +945,7 @@ static void ui_tick(lv_timer_t *t){
               }
           }
           if(files_hdr) lv_label_set_text(files_hdr, engine_running()?"REC":"");
+          { static int n=0; if(++n % 5 == 0){ int a = adb_running(); if(a != g_adb_on){ g_adb_on = a; adb_set_value(a); } } }
           if(http_val && g_http_port){
               char ip[32];
               char want[48];

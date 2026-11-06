@@ -123,5 +123,12 @@ int hs_battery_charging(void)
     return (strstr(b, "Charging") || strstr(b, "Full")) ? 1 : 0;
 }
 
+int hs_usb_online(void)
+{
+    int v = rd_int("/sys/class/power_supply/usb/online");
+    if(v < 0) v = rd_int("/sys/class/power_supply/ac/online");
+    return v > 0 ? 1 : 0;
+}
+
 /* ---------------- CPU ---------------- */
 void hs_cpu_max_freq(int khz) { wr_int("/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq", khz); }

@@ -35,6 +35,7 @@ int  hs_hp_inserted(void);
 int  hs_battery_capacity(void);
 int  hs_battery_voltage_uv(void);
 int  hs_battery_charging(void);
+int  hs_usb_online(void);   /* USB 是否插着（不依赖充电状态） */
 
 /* ---- CPU 频点上限 ---- */
 void hs_cpu_max_freq(int khz);
