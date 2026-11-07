@@ -25,6 +25,35 @@ static volatile int g_del_seq = 0;   /* 每次 HTTP 删除 +1，UI 据此刷新�
 static void add_deleted(const char *name){ (void)name; g_del_seq++; }
 int http_delete_seq(void){ return g_del_seq; }
 
+/* ---------- 删除令牌 ----------
+   删除只接受 POST，并且必须带页面上渲染出来的一次性令牌：GET 会被浏览器预取、
+   刷新重放、爬虫扫到都可能触发删除；没有令牌的话局域网上任何页面都能悄悄提交。 */
+#define TOKENS 8
+static char g_tok[TOKENS][17];
+static int  g_tok_next = 0;
+static int  g_tok_seeded = 0;
+
+static void token_seed(void){
+    if(g_tok_seeded) return;
+    g_tok_seeded = 1;
+    srand((unsigned)(time(NULL) ^ (getpid() << 16)));
+}
+
+static const char *token_new(void){
+    token_seed();
+    char *t = g_tok[g_tok_next];
+    g_tok_next = (g_tok_next + 1) % TOKENS;
+    for(int i = 0; i < 16; i++) t[i] = "0123456789abcdef"[rand() & 15];
+    t[16] = 0;
+    return t;
+}
+
+static int token_ok(const char *t){
+    if(!t || strlen(t) != 16) return 0;
+    for(int i = 0; i < TOKENS; i++) if(!strcmp(g_tok[i], t)) return 1;
+    return 0;
+}
+
 static int send_all(int fd, const char *buf, size_t n){
     size_t off=0;
     while(off<n){ ssize_t w=send(fd,buf+off,n-off,0); if(w<=0) return -1; off+=w; }
@@ -83,12 +112,31 @@ static int del_one(const char *name){
     return 1;
 }
 
-/* 支持 /delete?f=a.wav&f=b.wav 也支持 ?f=a.wav,b.wav */
-static void do_delete(int fd, const char *query){
+/* POST /delete   body: csrf=<token>&f=a.wav&f=b.wav（也支持 f=a,b） */
+static void do_delete(int fd, const char *query, const char *body){
     int done = 0, fail = 0;
-    if(query){
+    const char *src = body ? body : query;
+    if(body){
+        /* 令牌校验：从 body 里取 csrf= */
+        char tmp[4096];
+        snprintf(tmp, sizeof tmp, "%s", body);
+        char *cs = strstr(tmp, "csrf=");
+        char tok[64] = {0};
+        if(cs){
+            cs += 5;
+            int k = 0;
+            while(cs[k] && cs[k] != '&' && k < (int)sizeof tok - 1){ tok[k] = cs[k]; k++; }
+            tok[k] = 0;
+        }
+        if(!token_ok(tok)){
+            logmsg("http: delete rejected (bad token)");
+            send_err(fd, 403, "bad token");
+            return;
+        }
+    }
+    if(src){
         char q[4096];
-        snprintf(q, sizeof q, "%s", query);
+        snprintf(q, sizeof q, "%s", src);
         char *save = NULL;
         for(char *kv = strtok_r(q, "&", &save); kv; kv = strtok_r(NULL, "&", &save)){
             if(strncmp(kv, "f=", 2)) continue;
@@ -136,10 +184,11 @@ static void list_html(int fd, const char *root, const char *query){
     }
 
     off += snprintf(body+off,65536-off,
-        "<form method=GET action=/delete onsubmit=\"return confirm('删除选中的文件？不可恢复')\">"
+        "<form method=POST action=/delete onsubmit=\"return confirm('删除选中的文件？不可恢复')\">"
         "<table><tr>"
         "<th><input type=checkbox id=all onclick=\"for(const c of document.querySelectorAll('input.cb'))c.checked=this.checked\"></th>"
-        "<th>文件</th><th class=sz>大小</th><th class=sz>标记</th></tr>");
+        "<th>文件</th><th class=sz>大小</th><th class=sz>标记</th></tr>"
+        "<input type=hidden name=csrf value=\"%s\">", token_new());
 
     DIR *d = opendir(root);
     if(d){
@@ -243,28 +292,49 @@ static void *http_thread(void *arg){
 }
 
 static void handle_conn(int fd){
-    /* 请求行可能超过一次 recv：读到空行为止，最多 8 KB */
-    static char req[8192];
-    size_t got = 0;
+    /* 请求行 + 头 + 可选的 POST body；最多 32 KB（一次删几十个文件够用） */
+    static char req[32768];
+    size_t got = 0, hdr_end = 0;
     while(got < sizeof req - 1){
         ssize_t n = recv(fd, req + got, sizeof req - 1 - got, 0);
         if(n <= 0) break;
         got += (size_t)n;
         req[got] = 0;
-        if(strstr(req, "\r\n\r\n") || strstr(req, "\n\n")) break;
+        char *he = strstr(req, "\r\n\r\n");
+        if(!he) he = strstr(req, "\n\n");
+        if(he){
+            hdr_end = (size_t)(he - req) + (he[0]=='\r' ? 4 : 2);
+            /* 头里有 Content-Length 就要把 body 读满 */
+            int clen = 0;
+            char *cl = strstr(req, "Content-Length:");
+            if(cl) clen = atoi(cl + 15);
+            if(clen <= 0) break;
+            if(hdr_end + (size_t)clen <= got) break;
+            if(hdr_end + (size_t)clen > sizeof req - 1) break;   /* 太长：按已读到的处理 */
+        }
     }
     if(got == 0){ close(fd); return; }
     req[got] = 0;
+
     char method[8], rawpath[2048];
     if(sscanf(req, "%7s %2047s", method, rawpath) != 2){ close(fd); return; }
+
     char *range=NULL;
     { char *r=strstr(req,"Range:"); if(r){ range=r; char *e=strstr(r,"\r\n"); if(e) *e=0; } }
+
+    const char *body = hdr_end && hdr_end < got ? req + hdr_end : NULL;
 
     char *query = NULL;
     { char *q = strchr(rawpath, '?'); if(q){ *q = 0; query = q + 1; } }
 
     if(!strcmp(rawpath,"/")) list_html(fd, g_root, query);
-    else if(!strcmp(rawpath,"/delete")) do_delete(fd, query);
+    else if(!strcmp(rawpath,"/delete")){
+        if(strcmp(method, "POST") != 0){      /* 只接受 POST：GET 一律拒绝 */
+            send_err(fd, 405, "use POST");
+        } else {
+            do_delete(fd, query, body);
+        }
+    }
     else {
         const char *name=rawpath+1;
         if(!strncmp(name,"files/",6)) name+=6;
