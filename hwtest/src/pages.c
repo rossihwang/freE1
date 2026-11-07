@@ -29,7 +29,6 @@ static lv_obj_t *g_hp;
 static lv_obj_t *g_batt;
 
 static lv_obj_t *g_tearbar;
-static lv_obj_t *g_hint;
 static bool g_tear;
 static int g_tear_x;
 static int g_page = -1;
@@ -79,7 +78,7 @@ static lv_obj_t *mk_page(void)
     lv_obj_t *p = lv_obj_create(g_scr);
     lv_obj_remove_style_all(p);
     lv_obj_set_style_bg_opa(p, LV_OPA_TRANSP, 0);
-    lv_obj_set_size(p, NC, NAV_Y - BAR_H);
+    lv_obj_set_size(p, NC, NH - BAR_H);   /* 原来只到 NAV_Y（底部留给指示点），去掉滚动后按钮会被裁 */
     lv_obj_set_pos(p, 0, BAR_H);
     lv_obj_add_flag(p, LV_OBJ_FLAG_HIDDEN);
     return p;
@@ -125,12 +124,6 @@ static lv_obj_t *mk_btn(lv_obj_t *parent, int x, int y, int w, int h, const char
     return b;
 }
 
-static void dot_cb(lv_event_t *e)
-{
-    int i = (int)(intptr_t)lv_event_get_user_data(e);
-    pages_show(i);
-}
-
 static void build_chrome(void)
 {
     g_scr = lv_obj_create(NULL);
@@ -145,7 +138,6 @@ static void build_chrome(void)
     g_hp = mk_lbl(g_scr, "HP OUT", &lv_font_montserrat_14, 0x666666, 196, 5);
     g_batt = mk_lbl(g_scr, "---%", &lv_font_montserrat_14, 0x888888, 272, 5);
 
-    g_hint = mk_lbl(g_scr, "2-finger swipe", &lv_font_montserrat_14, 0x333333, 6, NAV_Y + 6);
 
     /* tear test bar: .cmd tear toggles a fast horizontal sweep */
     g_tearbar = mk_box(g_scr, 0, BAR_H, 10, NAV_Y - BAR_H, 0xffffff, 0);
@@ -159,7 +151,6 @@ static void update_chrome(void)
     if(last_page != g_page) {
         last_page = g_page;
         lv_label_set_text(g_title, (g_page >= 0 && g_page < 5) ? g_names[g_page] : "");
-        if(g_hint) lv_label_set_text(g_hint, g_page == 4 ? "swipe up to exit" : "2-finger swipe");
     }
 
     int hpi = hp_inserted() ? 1 : 0;
