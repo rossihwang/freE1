@@ -27,7 +27,7 @@ static lv_obj_t *g_pages[5];
 static lv_obj_t *g_title;
 static lv_obj_t *g_hp;
 static lv_obj_t *g_batt;
-static lv_obj_t *g_dots[6];
+
 static lv_obj_t *g_tearbar;
 static lv_obj_t *g_hint;
 static bool g_tear;
@@ -137,23 +137,14 @@ static void build_chrome(void)
     lv_obj_remove_style_all(g_scr);
     lv_obj_set_style_bg_color(g_scr, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(g_scr, LV_OPA_COVER, 0);
+    /* 单指滑动会把整页拖走（内容比屏幕高时 LVGL 默认允许滚动），翻页只用双指手势 */
+    lv_obj_remove_flag(g_scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(g_scr, LV_SCROLLBAR_MODE_OFF);
 
     g_title = mk_lbl(g_scr, "TOUCH", &lv_font_montserrat_14, 0xffffff, 6, 5);
     g_hp = mk_lbl(g_scr, "HP OUT", &lv_font_montserrat_14, 0x666666, 196, 5);
     g_batt = mk_lbl(g_scr, "---%", &lv_font_montserrat_14, 0x888888, 272, 5);
 
-    for(int i = 0; i < 5; i++) {
-        lv_obj_t *d = lv_obj_create(g_scr);
-        lv_obj_remove_style_all(d);
-        lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(d, lv_color_hex(0x444444), 0);
-        lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
-        lv_obj_set_size(d, 7, 7);
-        lv_obj_set_pos(d, 320 / 2 - 24 + i * 9, NAV_Y + 8);
-        lv_obj_add_flag(d, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(d, dot_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        g_dots[i] = d;
-    }
     g_hint = mk_lbl(g_scr, "2-finger swipe", &lv_font_montserrat_14, 0x333333, 6, NAV_Y + 6);
 
     /* tear test bar: .cmd tear toggles a fast horizontal sweep */
@@ -169,10 +160,6 @@ static void update_chrome(void)
         last_page = g_page;
         lv_label_set_text(g_title, (g_page >= 0 && g_page < 5) ? g_names[g_page] : "");
         if(g_hint) lv_label_set_text(g_hint, g_page == 4 ? "swipe up to exit" : "2-finger swipe");
-        for(int i = 0; i < 5; i++) {
-            uint32_t c = (i == g_page) ? 0xffffff : 0x444444;
-            lv_obj_set_style_bg_color(g_dots[i], lv_color_hex(c), 0);
-        }
     }
 
     int hpi = hp_inserted() ? 1 : 0;
