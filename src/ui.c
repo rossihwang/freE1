@@ -407,7 +407,10 @@ static void show_page(int p){
 static void ui_activity(void);   /* 定义在后面 */
 static int g_screen_on = 1;      /* 屏幕是否点亮（空闲逻辑与电源键都要用） */
 static void set_rec_ui(int on){
-    if(recording != on){ led_set(on); motor_pulse(); }
+    if(recording != on){
+        led_set(on);                  /* 红=录音、绿=待机，无声反馈 */
+        if(!on) motor_pulse();        /* 停录之后才允许振动（此时文件已关闭） */
+    }
     recording = on;
     if(!on) g_paused = 0;
     /* 大按钮三态：待机 REC / 录音 PAUSE / 暂停 RESUME（停止交给 STOP 键或长按） */
@@ -510,7 +513,12 @@ static void led_set(int on){
     hs_led_color(on ? 1 : 2);        /* 1=红 2=绿 */
     hs_led_pwm(on ? 200 : 80);
 }
-static void motor_pulse(void){ hs_motor_pattern(0); }
+/* 录音时禁止一切振动：马达是结构声，直接耦合进 PDM 麦克风被录下来。
+   需要反馈就用 LED（无声）；停止录音后再允许振动。 */
+static void motor_pulse(void){
+    if(engine_running()){ logmsg("motor: suppressed (recording)"); return; }
+    hs_motor_pattern(0);
+}
 
 static void monitor_refresh(void);
 
@@ -1629,7 +1637,7 @@ void ui_on_hw_key(int code, int pressed){
             if(mst && mst->seg[0]){
                 uint64_t ms = mst->frames * 1000ULL / (uint64_t)FMT_RATE[g_fmt];
                 if(marks_append(g_dir, mst->seg, ms) == 0){
-                    motor_pulse();
+                    /* 不振动：录音中振动会进音轨。反馈只靠 toast + LED */
                     char tb[64];
                     unsigned secs = (unsigned)(ms / 1000);
                     snprintf(tb, sizeof tb, "MARK %u  %02u:%02u:%02u",
