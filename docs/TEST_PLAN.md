@@ -199,6 +199,13 @@ RTC, and `rcS` has no `hwclock -w`.
 | Firmware self-heals | startup and every 10 min, write when >60 s apart | `rtc: synced (rtc 1570154401, sys 1794056730)` after dragging it back to 2019 |
 | Guard | never write an implausible system time | skipped below 2024 |
 
-Still open: whether the RTC keeps time with the main power removed. That needs a
-real power-off, not a reboot - the PMIC stays powered during a reboot, so this
-test does not prove a backup cell exists.
+Power loss (2026-11-07 21:10): powered off with `poweroff`, waited for the SSH
+connection to die, then pressed the power key. The kernel loaded
+`setting system clock to 2026-11-07 13:10:48 UTC (1794057048)` against a recorded
+power-off time of 1794057039 - nine seconds earlier, i.e. the RTC kept counting
+while the device was off. So there is a backup cell for the PMIC RTC and the 2019
+values were purely "never written", not "no battery".
+
+With the firmware now writing the RTC, the device keeps the correct time across a
+power cycle even with no network, and the `last_time` restore becomes a fallback
+rather than the only line of defence.
