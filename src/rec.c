@@ -174,7 +174,7 @@ int rec_run(rec_cfg *cfg){
         if(wav_open(&w,path,cfg->rate,2,(uint16_t)(cfg->bits?cfg->bits:24))!=0){ logmsg("wav open failed: %s",path); break; }
         snprintf(s.path,sizeof s.path,"%s",path); s.frames=0; session_save(&s);
         if(st){ const char *bn = strrchr(path,'/'); snprintf(st->seg,sizeof st->seg,"%s", bn?bn+1:path); }
-        logmsg("segment start: %s",path);
+        logmsg("segment start: %s (%u Hz / %u bit)", path, cfg->rate, (unsigned)(cfg->bits?cfg->bits:24));
 
         int64_t seg_ms = mono_ms();
         int64_t paused_at = 0;

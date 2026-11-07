@@ -183,7 +183,7 @@ static void set_perf(int on){
 static void perf_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; set_perf(!g_perf_on); }
 static lv_obj_t *http_row_val, *storage_val;
 static int  g_http_port = 0;
-static int  g_fmt = 0;          /* 0 = 48k/24bit, 1 = 44.1k/16bit */
+static int  g_fmt = 0;          /* 0 = 48k/24bit, 1 = 48k/16bit（44.1k 不可用，见 BACKLOG） */
 /* 第二档只降位深、不降采样率：44.1 kHz 下 PDM 阵列的 ch6/ch7 恒为 0
    （实测 48k 全部 8 路正常，44.1k 只有 ch0-5 有数据），定向模式会录成静音，
    所以不提供 44.1k。 */
@@ -249,7 +249,14 @@ static void mode_load(void){
 static void fmt_cb(lv_event_t *e){
     (void)e;
     if(!tap_ok()) return;
-    if(engine_running()){ show_warn("Stop recording before changing format."); return; }
+    if(engine_running()){
+        /* 顺手把当前实际格式念出来：以前只提示"先停录音"，用户容易以为自己改成功了，
+           接着录出来还是旧格式（这就是"选了 24bit 实际 16bit"最常见的一种情况）。 */
+        char wb[80];
+        snprintf(wb, sizeof wb, "Stop recording first. Now: %s", g_fmt ? "48k/16bit" : "48k/24bit");
+        show_warn(wb);
+        return;
+    }
     g_fmt = !g_fmt;
     if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "48k / 16bit" : "48k / 24bit");
     fmt_save();
@@ -280,6 +287,40 @@ static int  g_idle_handled = 0;  /* 本次空闲周期是否已处理 */
 static int64_t g_off_at = 0;     /* 熄屏时刻（0 = 未熄屏） */
 static int64_t g_wake_at = 0;    /* 上次唤醒的时间（用于重置 idle 周期） */
 static int g_shots = 0;
+
+static void toast(const char *msg);
+static void toast_fmt(const char *fmt, ...);
+/* 播放音量（0..100）：写 softvol 的 Master 控制（/etc/asound.conf 里
+   pcm.softvol 绑定的就是 "Master Playback Volume"），所以对文件回放有效。
+   监听走的是 hw:0,0 直连，不受这里影响。 */
+static int g_vol = 80;
+static void vol_apply(void){
+    char cmd[128];
+    snprintf(cmd, sizeof cmd, "amixer -c 0 sset Master %d%% >/dev/null 2>&1", g_vol);
+    (void)system(cmd);
+    logmsg("volume: %d%%", g_vol);
+}
+static void vol_save(void){
+    char path[512]; snprintf(path,sizeof path,"%s/volume", g_dir);
+    FILE *f=fopen(path,"w"); if(f){ fprintf(f,"%d\n", g_vol); fclose(f); }
+}
+static void vol_load(void){
+    char path[512]; snprintf(path,sizeof path,"%s/volume", g_dir);
+    FILE *f=fopen(path,"r"); if(!f) return;
+    int v=80; if(fscanf(f,"%d",&v)==1 && v>=0 && v<=100) g_vol=v;
+    fclose(f);
+}
+static void vol_step(int delta){
+    int v = g_vol + delta;
+    if(v < 0) v = 0;
+    if(v > 100) v = 100;
+    if(v == g_vol){ toast_fmt("VOL %d%%", g_vol); return; }
+    g_vol = v;
+    vol_apply();
+    vol_save();
+    char b[32]; snprintf(b,sizeof b,"VOL %d%%", g_vol);
+    toast(b);
+}
 
 static lv_obj_t *mk_label(lv_obj_t *parent, const char *txt, const lv_font_t *font, uint32_t color){
     lv_obj_t *l = lv_label_create(parent);
@@ -1064,6 +1105,7 @@ static void power_dlg_close(void);
 static void toggle_record(void);
 static void do_suspend(void);
 
+void ui_on_hw_key(int code, int pressed);
 static void poll_cmd(void){
     FILE *f=fopen("/mnt/sdcard/freE1/.cmd","rb");
     if(!f) return;
@@ -1125,6 +1167,19 @@ static void poll_cmd(void){
                    g_guard_free_gb, g_guard_batt, g_guard_ignore_chg);
         }
     }
+    else if(!strncmp(b,"fmt ",4)){                       /* fmt 0|1：只改内存，不写盘 */
+        int v=atoi(b+4);
+        if(v==0||v==1){
+            g_fmt=v;
+            if(fmt_val) lv_label_set_text(fmt_val, g_fmt? "48k / 16bit" : "48k / 24bit");
+            logmsg("test: format -> %s (not saved)", g_fmt? "48k/16bit":"48k/24bit");
+        }
+    }
+    else if(!strncmp(b,"key ",4)){                       /* key <code> <0|1>：模拟物理按键（测试用） */
+        int c=0, pr=1;
+        if(sscanf(b+4,"%d %d",&c,&pr)==2) ui_on_hw_key(c, pr);
+    }
+    else if(!strncmp(b,"vol ",4)){ int v=atoi(b+4); if(v>=0&&v<=100){ g_vol=v; vol_apply(); vol_save(); } }
     else if(!strncmp(b,"mark",4)){ ui_on_hw_key(2,1); ui_on_hw_key(2,0); }   /* 等同按下 MARK 键 */
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
     else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); mode_save(); logmsg("mode -> %d", input_mode); } }
@@ -1461,6 +1516,13 @@ static void toast(const char *msg){
     lv_timer_t *t = lv_timer_create(toast_kill_cb, 1500, NULL);
     lv_timer_set_repeat_count(t, 1);
 }
+static void toast_fmt(const char *fmt, ...){
+    char b[96];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(b, sizeof b, fmt, ap);
+    va_end(ap);
+    toast(b);
+}
 static lv_obj_t *warn_dlg = NULL;
 static void warn_close_cb(lv_event_t *e){ (void)e; if(warn_dlg){ lv_obj_delete(warn_dlg); warn_dlg=NULL; } tap_guard(); }
 static void show_warn(const char *msg){
@@ -1627,6 +1689,18 @@ void ui_on_swipe(int dx, int dy){
     else       show_page((page_idx+2)%NPAGES);
 }
 
+static lv_timer_t *g_rec_hold_timer = NULL;
+static int g_rec_hold_fired = 0;
+static void rec_hold_cb(lv_timer_t *t){
+    (void)t;
+    g_rec_hold_timer = NULL;
+    g_rec_hold_fired = 1;
+    screen_set(1);                     /* 先亮屏，让用户看到 RECORDING */
+    ui_activity();
+    logmsg("key: REC long press while screen off -> start recording");
+    if(!engine_running()) rec_pause_cycle();
+}
+
 void ui_on_hw_key(int code, int pressed){
     if(pressed) g_last_key_code = code;
     if(code==7){
@@ -1657,6 +1731,35 @@ void ui_on_hw_key(int code, int pressed){
         }
         return;
     }
+    /* 音量键（KEY_4/KEY_5，adc-keys 上是 code 5/6） */
+    if(code == 5 || code == 6){
+        if(!pressed) return;
+        ui_activity();
+        g_idle_handled = 0;
+        if(!g_screen_on){ screen_set(1); return; }
+        vol_step(code == 5 ? +5 : -5);
+        return;
+    }
+
+    /* 灭屏下长按录音键 = 直接开录（不用先点亮屏幕）；短按只唤醒 */
+    if(code == 4 && !g_screen_on){
+        if(pressed){
+            g_rec_hold_fired = 0;
+            if(g_rec_hold_timer){ lv_timer_delete(g_rec_hold_timer); g_rec_hold_timer = NULL; }
+            g_rec_hold_timer = lv_timer_create(rec_hold_cb, 700, NULL);
+            lv_timer_set_repeat_count(g_rec_hold_timer, 1);
+        } else {
+            if(g_rec_hold_timer){ lv_timer_delete(g_rec_hold_timer); g_rec_hold_timer = NULL; }
+            if(!g_rec_hold_fired){          /* 短按：只把屏幕唤醒 */
+                screen_set(1);
+                ui_activity();
+                g_idle_handled = 0;
+            }
+            g_rec_hold_fired = 0;
+        }
+        return;
+    }
+
     if(!pressed) return;
     ui_activity();
     g_idle_handled = 0;
@@ -1761,6 +1864,8 @@ int ui_run_device(const char *dir, int http_port){
     idle_load();
     fmt_load();
     mode_load();
+    vol_load();
+    vol_apply();
     guard_load();
     hs_motor(false);   /* 清掉上次可能卡住的振动 */
     hs_audio_route(hs_hp_inserted());   /* 耳机/扬声器路由（驱动可能把 HPOUT 留在 0） */
