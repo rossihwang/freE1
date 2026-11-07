@@ -183,3 +183,22 @@ bottom sat on top of page content. Both are gone, pages are sized to the full
 height below the title bar, and the `2-finger swipe` hint that overlapped the
 buttons was removed with them. Verify by eye: no dots, and dragging on the touch
 grid paints cells instead of moving the page.
+
+## 14. RTC (2026-11-07)
+
+The RK808 PMIC has an RTC (`/dev/rtc0`, `hctosys=1`), so the kernel loads the
+system clock from it at boot. Nothing had ever written it, which is the real
+reason a power cycle lands in 2019 - NTP corrected the system clock but never the
+RTC, and `rcS` has no `hwclock -w`.
+
+| Check | Expected | Measured |
+|---|---|---|
+| RTC exists | `/dev/rtc0`, `rk808-rtc` | yes, `hctosys: 1` |
+| Write it in UTC | `hwclock -u -w` makes `since_epoch` equal `date +%s` | 1794056617 = 1794056617 |
+| Reboot keeps time | kernel loads the written value | `setting system clock to 2026-11-07 13:03:54 UTC` |
+| Firmware self-heals | startup and every 10 min, write when >60 s apart | `rtc: synced (rtc 1570154401, sys 1794056730)` after dragging it back to 2019 |
+| Guard | never write an implausible system time | skipped below 2024 |
+
+Still open: whether the RTC keeps time with the main power removed. That needs a
+real power-off, not a reboot - the PMIC stays powered during a reboot, so this
+test does not prove a backup cell exists.
