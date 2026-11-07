@@ -1,0 +1,12 @@
+# 本地设备环境（复制成 e1env 后填写；e1env 已在 .gitignore 里，不会入库）
+#
+#   cp e1env.example e1env
+#   vi e1env        # 填上你设备的地址
+#
+# 所有 device-*.sh / scripts/*.sh 都会自动读取仓库根目录的 e1env。
+
+# ssh 目标：root@<设备IP>
+E1_HOST=root@192.168.1.100
+
+# 可选：ssh 私钥路径（默认用仓库外的 .e1work/ssh/id_ed25519）
+# E1_KEY=/path/to/id_ed25519

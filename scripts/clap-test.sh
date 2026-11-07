@@ -2,10 +2,23 @@
 # 拍手测试：设备上录 5 分钟 8ch，然后本地分析方向性 + 几何
 # 用法: ./freE1/scripts/clap-test.sh
 set -u
-HOST=${E1_HOST:-root@192.168.3.89}   # 可 export E1_HOST=root@<设备IP> 覆盖
-KEY=.e1work/ssh/id_ed25519
+# 设备地址与私钥来自本地 e1env（不入库）；没有就 cp e1env.example e1env 并填写
+_e1_here=$(cd "$(dirname "$0")" && pwd)
+_e1_root="$_e1_here"; case "$_e1_here" in */scripts) _e1_root=$(cd "$_e1_here/.." && pwd) ;; esac
+for _e1_f in "$_e1_root/e1env" "$_e1_here/e1env"; do
+    if [ -f "$_e1_f" ]; then . "$_e1_f"; break; fi
+done
+HOST=${E1_HOST:?未配置设备地址：请 cp e1env.example e1env 并填入 E1_HOST=root@<设备IP>}
+if [ -z "${E1_KEY:-}" ]; then
+    for _e1_k in "$_e1_root/../.e1work/ssh/id_ed25519" "$_e1_root/.e1work/ssh/id_ed25519" "$HOME/.ssh/id_ed25519"; do
+        [ -f "$_e1_k" ] && E1_KEY="$_e1_k" && break
+    done
+fi
+KEY=${E1_KEY:?找不到 ssh 私钥：在 e1env 里设置 E1_KEY=/path/to/id_ed25519}
+
 S="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=6 $HOST"
-OUT=verify/cap/clap_$(date +%H%M).wav
+OUT="$_e1_root/../verify/cap/clap_$(date +%H%M).wav"   # 放在仓库外（项目根的 verify/cap）
+mkdir -p "$(dirname "$OUT")"
 
 echo "开始录音 5 分钟，请在设备上按指示拍手..."
 $S 'mkdir -p /mnt/sdcard/claptest; rm -f /mnt/sdcard/claptest/*.wav; pkill -x arecord 2>/dev/null;

@@ -6,6 +6,19 @@
 > 系统限制见 [`../E1_ZhiyinOS限制清单.md`](../E1_ZhiyinOS限制清单.md)，
 > 实测记录见 [`../verify/FINDINGS.md`](../verify/FINDINGS.md)。
 
+## 首次使用：配置设备地址
+
+脚本不再把设备 IP 写死在仓库里，统一读仓库根目录的 `e1env`（已在 `.gitignore`）：
+
+```bash
+cp e1env.example e1env
+vi e1env          # E1_HOST=root@<你的设备IP>
+```
+
+`e1env` 支持两个变量：`E1_HOST`（必填，`root@<IP>`）、`E1_KEY`（可选，ssh 私钥路径；
+不写就依次找 `../.e1work/ssh/id_ed25519`、`.e1work/ssh/id_ed25519`、`~/.ssh/id_ed25519`）。
+也可以临时用环境变量覆盖：`E1_HOST=root@10.0.0.5 ./device-app.sh status`。
+
 ## 构建前置
 
 仓库不含第三方源码，首次构建前取一次：

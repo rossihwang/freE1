@@ -3,8 +3,12 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT="$ROOT/cross/out/alsa"
-DEV=${1:-${E1_HOST:-root@192.168.3.89}}
-KEY="$ROOT/.e1work/ssh/id_ed25519"
+# 设备地址来自本地 e1env（不入库）；没有就在仓库根目录 cp e1env.example e1env
+_e1_here=$(cd "$(dirname "$0")" && pwd)
+for _e1_f in "$_e1_here/e1env" "$_e1_here/../e1env" "$_e1_here/../../e1env"; do
+    if [ -f "$_e1_f" ]; then . "$_e1_f"; break; fi
+done
+DEV=${1:-$HOST}
 mkdir -p "$OUT/include"
 if [ ! -f "$OUT/libasound.so.2.0.0" ]; then
     echo "pull libasound from $DEV"
