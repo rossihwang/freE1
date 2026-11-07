@@ -586,16 +586,23 @@ static void screen_set(int on){
 static void sysfs_write(const char *path, const char *val){
     FILE *f=fopen(path,"w"); if(f){ fputs(val,f); fclose(f); }
 }
-static void led_set(int on){
-    hs_led_key(on);
-    hs_led_top(true);
-    hs_led_color(on ? 1 : 2);        /* 1=红 2=绿 */
-    hs_led_pwm(on ? 200 : 80);
+/* 顺序很重要：这个驱动的 color/pwm 写入会把 enable 清 0，
+   所以永远是"先颜色、再亮度、最后 enable"。 */
+static void led_write(int on, int color, int pwm){
+    hs_led_color(color);
+    hs_led_pwm(on ? pwm : 0);
+    hs_led_top(on ? true : false);
 }
-/* 录音中按峰值情况给 LED 分三档（只改变化，别每个 tick 都写 /proc）：
-     0 正常录音  红、暗
+static void led_set(int rec){
+    hs_led_key(false);
+    if(rec) led_write(1, 1, 60);   /* 录音：先暗红，正常录音时由 rec_led 熄掉 */
+    else    led_write(0, 0, 0);    /* 待机：不亮（只有异常才点灯） */
+}
+/* 录音中只在异常时亮灯（用户要求：正常录音不亮）：
+     0 正常录音       灭（并清掉按键灯）
      1 限制器介入（>0.9）  黄、常亮
-     2 ADC 削顶（>=0.99）  红、闪                                   */
+     2 ADC 削顶（>=0.99）  红、闪
+   复位音量条后回到全灭；停止录音回到待机（绿、暗，由 led_set 负责）。 */
 static void rec_led_update(void);
 static void rec_led_tick(lv_timer_t *t){ (void)t; rec_led_update(); }
 static void rec_led_update(void){
@@ -608,17 +615,21 @@ static void rec_led_update(void){
     }
     if(want == last) {
         if(want == 2){                                /* 削顶要闪，所以每帧都要改 pwm */
-            hs_led_top(true); hs_led_color(1);
-            hs_led_pwm(((mono_ms() / 200) & 1) ? 240 : 20);
+            hs_led_key(true);
+            led_write(1, 1, ((mono_ms() / 200) & 1) ? 240 : 20);
         }
         return;
     }
     last = want;
     if(want < 0) return;
-    hs_led_top(true);
-    if(want == 2){ hs_led_color(1); hs_led_pwm(240); logmsg("led: CLIP (adc saturated)"); }
-    else if(want == 1){ hs_led_color(4); hs_led_pwm(200); logmsg("led: limiter engaged"); }
-    else { hs_led_color(1); hs_led_pwm(60); }
+    if(want == 0){                                  /* 正常录音：不亮 */
+        led_write(0, 0, 0);
+        hs_led_key(false);
+        return;
+    }
+    hs_led_key(true);
+    if(want == 2){ led_write(1, 1, 240); logmsg("led: CLIP (adc saturated)"); }
+    else         { led_write(1, 4, 200); logmsg("led: limiter engaged"); }
 }
 /* 录音时禁止一切振动：马达是结构声，直接耦合进 PDM 麦克风被录下来。
    需要反馈就用 LED（无声）；停止录音后再允许振动。 */
@@ -2007,6 +2018,7 @@ int ui_run_device(const char *dir, int http_port){
         }
     }
     ui_activity();
+    led_set(0);                                  /* 开机就是待机：绿灯（录音信号只在变化时才设） */
     lv_timer_create(ui_tick,200,NULL);
     lv_timer_create(rec_led_tick, 100, NULL);   /* LED 状态：红闪要 ~5 Hz 刷新 */
     logmsg("device UI up: dir=%s http=%d", g_dir, g_http_port);
