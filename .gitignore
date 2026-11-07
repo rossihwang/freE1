@@ -22,3 +22,6 @@ shots/*.raw
 # Python
 __pycache__/
 *.pyc
+
+# 原厂 App 解包出来的资源（不入库、不公开）
+hwtest/docs/qml/
