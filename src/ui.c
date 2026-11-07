@@ -404,6 +404,7 @@ static void show_page(int p){
 
 
 static void ui_activity(void);   /* 定义在后面 */
+static int g_screen_on = 1;      /* 屏幕是否点亮（空闲逻辑与电源键都要用） */
 static void set_rec_ui(int on){
     if(recording != on){ led_set(on); motor_pulse(); }
     recording = on;
@@ -436,7 +437,10 @@ static void set_rec_ui(int on){
         /* 录音时屏幕早已自动熄灭，g_off_at 是很久以前的值；停止后不重置的话，
            下一个 tick 就会认为"熄屏已超过 180 s"而立即进入休眠（实测停录后 1 ms 就睡）。 */
         ui_activity();
-        g_off_at = 0;
+        /* 屏幕亮着：重开空闲周期（60 s 熄屏、再 180 s 休眠）。
+           屏幕已经是熄的（例如低电/低存储自动停录）：从这一刻起重新计 180 s，
+           否则 g_off_at 归零后再也没有"熄屏"事件来重新置位，设备会一直醒着。 */
+        g_off_at = g_screen_on ? 0 : mono_ms();
     } else if(chart){
         lv_obj_remove_flag(chart, LV_OBJ_FLAG_HIDDEN);
     }
@@ -489,7 +493,6 @@ static void do_suspend(void){
     }
 }
 
-static int g_screen_on = 1;
 static void screen_set(int on){
     g_screen_on = on;
     hs_backlight_set(on ? 200 : 0);
