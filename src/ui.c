@@ -430,7 +430,7 @@ static void add_back_btn(lv_obj_t *p){
 }
 static void show_page(int p){
     logmsg("page -> %d (+%lld ms)", p, (long long)(mono_ms() - g_start_ms));
-    if(p != 1 && play_is_active()){ play_stop(); g_play_file[0] = 0; logmsg("play: stopped (page change)"); }   /* 无底部栏：离开文件页 = 停止 */
+    if(p != 1 && play_is_active()){ play_scan(0); play_stop(); g_play_file[0] = 0; logmsg("play: stopped (page change)"); }   /* 无底部栏：离开文件页 = 停止 */
     if(p != 0 && g_start_ms && (mono_ms() - g_start_ms) < 800){
         logmsg("page: ignored (startup window)");
         return;
@@ -788,6 +788,19 @@ static void build_record_page(lv_obj_t *p){
 
 static void del_row_cb(lv_event_t *e);
 static void play_row_cb(lv_event_t *e);
+static void row_long_cb(lv_event_t *e);
+static void row_release_cb(lv_event_t *e);
+static void del_row_cb(lv_event_t *e);
+/* 长按正在播放的行 = 快进：播放器每读一块多跳 3 块（约 4 倍速），松手恢复 */
+#define FF_SKIP_CHUNKS 3
+static void ff_stop(void){ play_scan(0); }
+static void ff_start(const char *name){
+    play_state_t ps; play_get_state(&ps);
+    if(!ps.active || ps.paused || strcmp(name, g_play_file)) return;   /* 暂停中不快进 */
+    play_scan(FF_SKIP_CHUNKS);
+    logmsg("play: fast-forward start (%dx)", FF_SKIP_CHUNKS + 1);
+    toast("FF 4x");
+}
 
 typedef struct { char name[192]; long size; double dur; long mt; int rate, bits; } finfo;
 static int finfo_cmp(const void *a, const void *b){
@@ -873,7 +886,9 @@ static void files_refresh(void){
             lv_obj_align(mb2, LV_ALIGN_TOP_RIGHT, -12, 8);
         }
         lv_obj_add_flag(row,LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(row,del_row_cb,LV_EVENT_LONG_PRESSED,(void*)arr[i].name);
+        lv_obj_add_event_cb(row,row_long_cb,LV_EVENT_LONG_PRESSED,(void*)arr[i].name);
+        lv_obj_add_event_cb(row,row_release_cb,LV_EVENT_RELEASED,NULL);
+        lv_obj_add_event_cb(row,row_release_cb,LV_EVENT_PRESS_LOST,NULL);
         lv_obj_add_event_cb(row,play_row_cb,LV_EVENT_SHORT_CLICKED,(void*)arr[i].name);
         lv_obj_add_flag(row, LV_OBJ_FLAG_EVENT_BUBBLE);   /* 让页级滑动能收到 */
         y+=90;
@@ -1180,6 +1195,9 @@ static void poll_cmd(void){
         if(sscanf(b+4,"%d %d",&c,&pr)==2) ui_on_hw_key(c, pr);
     }
     else if(!strncmp(b,"vol ",4)){ int v=atoi(b+4); if(v>=0&&v<=100){ g_vol=v; vol_apply(); vol_save(); } }
+    else if(!strncmp(b,"ff ",3)){                         /* ff 1 = 开始快进，ff 0 = 停止 */
+        if(atoi(b+3)) ff_start(g_play_file); else { ff_stop(); logmsg("play: fast-forward stop"); }
+    }
     else if(!strncmp(b,"mark",4)){ ui_on_hw_key(2,1); ui_on_hw_key(2,0); }   /* 等同按下 MARK 键 */
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
     else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); mode_save(); logmsg("mode -> %d", input_mode); } }
@@ -1605,6 +1623,17 @@ static void play_row_cb(lv_event_t *e){
     }
 }
 
+/* 长按：正在播放的行 -> 快进；其它行 -> 删除确认 */
+static void row_long_cb(lv_event_t *e){
+    const char *n = (const char*)lv_event_get_user_data(e);
+    play_state_t ps; play_get_state(&ps);
+    if(ps.active && !strcmp(n, g_play_file)) ff_start(n);
+    else del_row_cb(e);
+}
+static void row_release_cb(lv_event_t *e){
+    (void)e;
+    ff_stop();
+}
 static void del_row_cb(lv_event_t *e){
     const char *n=(const char*)lv_event_get_user_data(e);
     if(engine_running()){ lv_label_set_text(state_lbl,"STOP FIRST"); return; }

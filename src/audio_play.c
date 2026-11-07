@@ -27,6 +27,7 @@ typedef struct {
     int64_t  pos_bytes;     /* 已送出的字节数 */
 
     int64_t  seek_req_ms;   /* <0 表示无请求 */
+    int      scan_chunks;   /* >0 = 每读一块多跳过这么多块（快进） */
 } player_t;
 
 static player_t g_p;
@@ -105,6 +106,7 @@ static void *player_thread(void *arg)
         pthread_mutex_lock(&p->lock);
         if(p->stop_req){ pthread_mutex_unlock(&p->lock); break; }
         int paused = p->paused;
+        int scan = p->scan_chunks;
         int64_t seek = p->seek_req_ms;
         if(seek >= 0){
             p->seek_req_ms = -1;
@@ -128,6 +130,16 @@ static void *player_thread(void *arg)
         pthread_mutex_lock(&p->lock);
         size_t got = fread(in, 1, want, p->f);
         if(got > 0) p->pos_bytes += (int64_t)got;
+        /* 快进：整块照常送出去（不动 PCM，所以没有每次 seek 的咔哒声），
+           但下一块直接从更后面读，听觉上就是快速掠过内容 */
+        if(got > 0 && scan > 0){
+            int64_t skip = (int64_t)scan * (int64_t)want;
+            if(p->pos_bytes + skip > p->data_bytes) skip = p->data_bytes - p->pos_bytes;
+            if(skip > 0){
+                fseek(p->f, (long)skip, SEEK_CUR);
+                p->pos_bytes += skip;
+            }
+        }
         pthread_mutex_unlock(&p->lock);
         if(got == 0) break;   /* 播完 */
 
@@ -191,6 +203,7 @@ int play_open(const char *dir, const char *name)
     g_p.data_off = off; g_p.data_bytes = bytes;
     g_p.pos_bytes = 0;
     g_p.paused = 0;
+    g_p.scan_chunks = 0;
     g_p.stop_req = 0;
     g_p.seek_req_ms = -1;
     pthread_mutex_unlock(&g_p.lock);
@@ -226,6 +239,15 @@ void play_toggle_pause(void)
 {
     pthread_mutex_lock(&g_p.lock);
     if(g_p.thread_alive) g_p.paused = !g_p.paused;
+    pthread_mutex_unlock(&g_p.lock);
+}
+
+void play_scan(int skip_chunks)
+{
+    if(skip_chunks < 0) skip_chunks = 0;
+    if(skip_chunks > 16) skip_chunks = 16;
+    pthread_mutex_lock(&g_p.lock);
+    g_p.scan_chunks = skip_chunks;
     pthread_mutex_unlock(&g_p.lock);
 }
 

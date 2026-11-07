@@ -18,5 +18,7 @@ int  play_open(const char *dir, const char *name);
 void play_stop(void);
 void play_toggle_pause(void);
 void play_seek_ms(int64_t ms);
+/* 快进：按住时每读一块就往前跳 skip_chunks 块（skip=0 恢复正常速度） */
+void play_scan(int skip_chunks);
 void play_get_state(play_state_t *st);
 int  play_is_active(void);
