@@ -848,13 +848,29 @@ static void http_set_value(int on, const char *text){
     lv_obj_set_style_text_color(http_val, lv_color_hex(on ? C_GREEN : C_DIM), 0);
 }
 
+/* HTTP 起停的唯一入口：必须顺带把 g_http_port 设对，否则 1 Hz 里那段
+   "把 IP 写进设置行" 的逻辑（if(http_val && g_http_port)）根本不会跑，
+   用户看到的就一直是 ON/OFF 而没有地址。 */
+static void http_apply(int on){
+    if(on){
+        if(!http_running() && http_start(g_dir, 8080) != 0){ http_set_value(0, "FAILED"); g_http_port = 0; return; }
+        g_http_port = 8080;
+        char ip[32];
+        if(wlan_ip(ip, sizeof ip) == 0){
+            char b[48]; snprintf(b, sizeof b, "%s:%d", ip, g_http_port);
+            http_set_value(1, b);
+        } else http_set_value(1, "ON :8080");
+    } else {
+        if(http_running()) http_stop();
+        g_http_port = 0;
+        http_set_value(0, "OFF");
+    }
+    logmsg("http: %s on :%d", on ? "on" : "off", g_http_port);
+}
 static void http_toggle_cb(lv_event_t *e){
     (void)e;
     if(!tap_ok()) return;
-    if(http_running()){ http_stop(); http_set_value(0, "OFF"); }
-    else if(http_start(g_dir,8080)==0){
-        http_set_value(1, "ON :8080");
-    } else http_set_value(0, "FAILED");
+    http_apply(!http_running());
 }
 
 static lv_obj_t *mk_row(lv_obj_t *parent,int y,const char *k,const char *v,uint32_t vc, lv_obj_t **val_out){
@@ -1067,8 +1083,8 @@ static void poll_cmd(void){
     else if(!strncmp(b,"mon",3)){ monitor_toggle(); logmsg("state: monitor=%d underruns=%d drops=%d", g_monitor_on, monitor_underruns(), monitor_drops()); }
     else if(!strncmp(b,"ppause",6)){ play_toggle_pause(); logmsg("play: toggle pause (cmd)"); }
     else if(!strncmp(b,"pseek ",6)){ play_seek_ms(atoll(b+6)); logmsg("play: seek %s ms (cmd)", b+6); }
-    else if(!strncmp(b,"httpoff",7)){ logmsg("test: http_stop begin"); http_stop(); logmsg("test: http_stop done"); }
-    else if(!strncmp(b,"httpon",6)){ int r=http_start(g_dir,8080); logmsg("test: http_start -> %d", r); }
+    else if(!strncmp(b,"httpoff",7)){ http_apply(0); }
+    else if(!strncmp(b,"httpon",6)){ http_apply(1); }
     else if(!strncmp(b,"state",5)){
         logmsg("state: screen=%d touch=%d http=%d label=%s", g_screen_on, hal_input_get_enabled(), g_http_port, http_val? lv_label_get_text(http_val) : "-");
     }
@@ -1097,6 +1113,18 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrolls ",8)){ if(settings_box) lv_obj_scroll_by(settings_box,0,-atoi(b+8),LV_ANIM_OFF); }
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
+    else if(!strncmp(b,"guardset ",9)){                  /* guardset <free_gb> <batt_pct>：临时改阈值，仅内存 */
+        char f1[24]={0}, f2[24]={0};
+        char f3[8]={0};
+        int n2 = sscanf(b+9,"%23s %23s %7s",f1,f2,f3);
+        if(n2 >= 2){
+            g_guard_free_gb = atof(f1);
+            g_guard_batt = atoi(f2);
+            if(n2 >= 3) g_guard_ignore_chg = atoi(f3);   /* 插着 USB 也能测低电保护 */
+            logmsg("guard: thresholds overridden free<%.2f GB batt<%d%% ignore_chg=%d",
+                   g_guard_free_gb, g_guard_batt, g_guard_ignore_chg);
+        }
+    }
     else if(!strncmp(b,"mark",4)){ ui_on_hw_key(2,1); ui_on_hw_key(2,0); }   /* 等同按下 MARK 键 */
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
     else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); mode_save(); logmsg("mode -> %d", input_mode); } }
