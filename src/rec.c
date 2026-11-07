@@ -76,8 +76,16 @@ static void agc_process(int32_t *buf, int n, int nch, const int map[2], proc_t *
     /* 峰值感知：增益不许把本块峰值顶过 0.9（瞬时下压，不缩整块） */
     double peak = 0;
     for(int i=0;i<n*2;i++){ double a = tmp[i]; if(a<0) a=-a; if(a>peak) peak=a; }
-    if(peak > 1e-9 && p->gain * peak > 0.9){ p->gain = 0.9 / peak; g_clip_soft = 1; }   /* 软：限制器介入 */
+    int limited = (peak > 1e-9 && p->gain * peak > 0.9);
+    if(limited) p->gain = 0.9 / peak;              /* 峰值不过 0.9 */
     double g = p->gain;
+    /* 按实际送出去的电平分档：>=0.9 红（贴着满量程），>=0.7 黄（离满量程 3 dB 以内） */
+    {
+        /* 0.9 这一档正好是限制器的天花板，浮点上可能差最后一位，用 0.899 兜住 */
+        double out_peak = peak * g;
+        if(limited || out_peak >= 0.899) g_clip_hard = 1;
+        else if(out_peak >= 0.699)       g_clip_soft = 1;
+    }
     for(int i=0;i<n;i++){
         for(int kk=0;kk<2;kk++){
             double v = tmp[i*2+kk] * g;

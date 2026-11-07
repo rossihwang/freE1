@@ -600,8 +600,8 @@ static void led_set(int rec){
 }
 /* 录音中只在异常时亮灯（用户要求：正常录音不亮）：
      0 正常录音       灭（并清掉按键灯）
-     1 限制器介入（>0.9）  黄、常亮
-     2 ADC 削顶（>=0.99）  红、闪
+     1 峰值 >= 0.7         黄、常亮（离满量程不到 3 dB）
+     2 峰值 >= 0.9         红、闪（再往上就是 ADC 削顶）
    复位音量条后回到全灭；停止录音回到待机（绿、暗，由 led_set 负责）。 */
 static void rec_led_update(void);
 static void rec_led_tick(lv_timer_t *t){ (void)t; rec_led_update(); }
@@ -628,8 +628,8 @@ static void rec_led_update(void){
         return;
     }
     hs_led_key(true);
-    if(want == 2){ led_write(1, 1, 240); logmsg("led: CLIP (adc saturated)"); }
-    else         { led_write(1, 4, 200); logmsg("led: limiter engaged"); }
+    if(want == 2){ led_write(1, 1, 240); logmsg("led: peak >= 0.9 (red)"); }
+    else         { led_write(1, 4, 200); logmsg("led: peak >= 0.7 (yellow)"); }
 }
 /* 录音时禁止一切振动：马达是结构声，直接耦合进 PDM 麦克风被录下来。
    需要反馈就用 LED（无声）；停止录音后再允许振动。 */
