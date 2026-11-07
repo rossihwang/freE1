@@ -32,6 +32,8 @@ vi e1env          # E1_HOST=root@<你的设备IP>
 ./scripts/fetch-alsa.sh      # libasound（回放用，从设备拉取）
 ```
 
+硬件测试程序（`hwtest/`）用同一套工具链，构建方法见 [`hwtest/README.md`](hwtest/README.md)。
+
 > 设备端回放改为**进程内 ALSA**（不再 fork aplay），因此固件从全静态变成
 > 动态链接 `libasound.so.2`（设备自带，原厂 aplay 也依赖它）。
 
@@ -45,7 +47,18 @@ ls shots/            # 静态截图（由 freE1 shots 生成）
 
 ## 设备（E1 本体）
 
-需要一份 aarch64 交叉工具链（构建脚本只用到 `aarch64-linux-gcc`，本仓库不含工具链）。
+需要一份 aarch64 交叉工具链，**版本要和设备上的 glibc 匹配**（构建脚本只用到 `aarch64-linux-gcc`，
+工具链本身不在本仓库）：
+
+| 项 | 值 |
+|---|---|
+| 工具链 | Bootlin `aarch64--glibc--stable-2018.02-2` |
+| 编译器 | `aarch64-linux-gcc` **6.4.0**（Buildroot 2018.02） |
+| libc | **glibc 2.26**（与原厂 Buildroot 2018.02 一致） |
+| 下载 | `https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2018.02-2.tar.bz2` |
+
+版本是照设备上运行的二进制定的，不是随便挑的：换更新的工具链会引入设备上不存在的
+glibc 符号，程序在设备上直接 `symbol not found`。
 
 ```bash
 export PATH=<你的交叉工具链>/bin:$PATH
