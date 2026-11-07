@@ -5,6 +5,8 @@
 #include "png.h"
 #endif
 #include <unistd.h>
+#include <ctype.h>
+#include <sys/time.h>
 #include <math.h>
 #include <sys/statvfs.h>
 #include <sys/stat.h>
@@ -223,6 +225,42 @@ static void guard_load(void){
     }
     fclose(f);
     logmsg("guard: free<%.2f GB, batt<%d%%", g_guard_free_gb, g_guard_batt);
+}
+
+/* RTC 没有后备电池：断电/重启后时钟会退到 2019-10-04，录出来的文件名和 mtime 全是假的。
+   每小时把当前时间写进 last_time，开机若发现系统时间明显早于它，就用它顶上去。
+   NTP 之后照常校时。 */
+static void clock_restore(void){
+    {   /* 时钟明显不合理（RTC 掉电）就记一笔，方便对照文件名为什么是 2019 */
+        time_t now = time(NULL); struct tm tm; localtime_r(&now, &tm);
+        if(tm.tm_year + 1900 < 2024) logmsg("clock: implausible (%04d), trying last_time", tm.tm_year + 1900);
+    }
+    char path[512]; snprintf(path,sizeof path,"%s/last_time", g_dir);
+    FILE *f=fopen(path,"r");
+    if(!f) return;
+    long long t=0;
+    if(fscanf(f,"%lld",&t)==1 && t>0){
+        time_t now=time(NULL);
+        if((long long)now < t - 120){
+            struct timeval tv; tv.tv_sec=(time_t)t; tv.tv_usec=0;
+            if(settimeofday(&tv,NULL)==0)
+                logmsg("clock: restored %lld -> %lld from last_time", (long long)now, t);
+            else logmsg("clock: settimeofday failed (errno %d)", errno);
+        }
+    }
+    fclose(f);
+}
+static void clock_save(void){
+    char path[512]; snprintf(path,sizeof path,"%s/last_time", g_dir);
+    long long now = (long long)time(NULL), old = 0;
+    /* 只能往前写：时钟坏掉时（例如又退回 2019）如果照写，就把已知的最晚时间冲掉了，
+       下次开机再也没法恢复 —— 这个单向性很关键。 */
+    FILE *rf=fopen(path,"r");
+    if(rf){ if(fscanf(rf,"%lld",&old)!=1) old=0; fclose(rf); }
+    if(now <= old) return;
+    FILE *f=fopen(path,"w"); if(!f) return;
+    fprintf(f,"%lld\n", now);
+    fclose(f);
 }
 
 static void fmt_save(void){
@@ -802,9 +840,13 @@ static void ff_start(const char *name){
     toast("FF 4x");
 }
 
-typedef struct { char name[192]; long size; double dur; long mt; int rate, bits; } finfo;
+typedef struct { char name[192]; long size; double dur; long mt; int rate, bits; long seq; } finfo;
+/* 排序用序号而不是 mtime：RTC 掉电后时钟会退到 2019，录出来的文件 mtime 也是 2019，
+   按 mtime 排就会沉到列表最底部（用户以为"没录上"）。序号是单调的，永远对。
+   名字里没有序号的（外部拷进来的）退回按 mtime。 */
 static int finfo_cmp(const void *a, const void *b){
     const finfo *x=a,*y=b;
+    if(x->seq != y->seq) return (x->seq < y->seq) - (x->seq > y->seq);
     return (y->mt > x->mt) - (y->mt < x->mt);
 }
 static void files_refresh(void){
@@ -829,6 +871,12 @@ static void files_refresh(void){
             snprintf(it->name,sizeof it->name,"%s",e->d_name);
             it->size=sz; it->dur = br? (double)data/br : 0;
             it->rate=(int)rate; it->bits=(int)bits;
+            {   /* REC_0154_... -> 154；不是这个命名就给 -1，排序时退回 mtime */
+                long sq = -1;
+                if(!strncmp(e->d_name, "REC_", 4) && isdigit((unsigned char)e->d_name[4]))
+                    sq = atol(e->d_name + 4);
+                it->seq = sq;
+            }
             struct stat stt; it->mt = stat(path,&stt)==0 ? (long)stt.st_mtime : 0;
         }
         closedir(d);
@@ -1346,6 +1394,7 @@ static void ui_tick(lv_timer_t *t){
           monitor_refresh();
           if(files_hdr) lv_label_set_text(files_hdr, engine_running()?"REC":"");
           { static int n=0; if(++n % 5 == 0){ int a = adb_running(); if(a != g_adb_on){ g_adb_on = a; adb_set_value(a); } } }
+          { static int n=0; if(++n % 60 == 0) clock_save(); }
           if(http_val && g_http_port){
               char ip[32];
               char want[48];
@@ -1890,6 +1939,7 @@ int ui_run_device(const char *dir, int http_port){
     g_device = 1;
     g_start_ms = mono_ms();
     { int n=rec_recover(g_dir); if(n) logmsg("startup: recovered %d file(s)",n); }
+    clock_restore();
     idle_load();
     fmt_load();
     mode_load();
