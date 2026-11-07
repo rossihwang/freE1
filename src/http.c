@@ -176,7 +176,18 @@ static void list_html(int fd, const char *root, const char *query){
         "button.del{background:#c0392b;color:#fff}"
         ".msg{padding:8px 12px;border-radius:8px;margin-bottom:12px;background:#16241c;color:#3cff7a}"
         "input[type=checkbox]{width:20px;height:20px}"
-        "</style></head><body><h3>freE1 recordings</h3>");
+        ".pl{background:#1b3a2a;color:#3cff7a;border:0;border-radius:6px;padding:6px 10px;font:13px monospace;cursor:pointer}"
+        "#bar{position:fixed;left:0;right:0;bottom:0;background:#11151c;padding:8px 12px;display:none;"
+        "border-top:1px solid #222}"
+        "#bar b{color:#3cff7a;font-weight:normal}"
+        "</style></head><body><h3>freE1 recordings</h3>"
+        "<div id=bar><span id=now>—</span> <audio id=pl controls preload=none style=\"width:min(560px,70vw);vertical-align:middle\"></audio></div>"
+        "<script>"
+        "function prev(n){const a=document.getElementById('pl');const b=document.getElementById('bar');"
+        "a.src='/'+encodeURIComponent(n);b.style.display='block';"
+        "document.getElementById('now').textContent=n;"
+        "a.play().catch(()=>{});return false;}"
+        "</script>");
 
     if(del || fail){
         off += snprintf(body+off,65536-off,"<div class=msg>已删除 %d 个文件%s</div>",
@@ -187,7 +198,7 @@ static void list_html(int fd, const char *root, const char *query){
         "<form method=POST action=/delete onsubmit=\"return confirm('删除选中的文件？不可恢复')\">"
         "<table><tr>"
         "<th><input type=checkbox id=all onclick=\"for(const c of document.querySelectorAll('input.cb'))c.checked=this.checked\"></th>"
-        "<th>文件</th><th class=sz>大小</th><th class=sz>标记</th></tr>"
+        "<th>文件</th><th class=sz>时长</th><th class=sz>大小</th><th class=sz>标记</th><th class=sz>预览</th></tr>"
         "<input type=hidden name=csrf value=\"%s\">", token_new());
 
     DIR *d = opendir(root);
@@ -210,19 +221,37 @@ static void list_html(int fd, const char *root, const char *query){
             char path[700]; struct stat st;
             snprintf(path, sizeof path, "%s/%s", root, names[i]);
             double mb = (stat(path, &st) == 0) ? st.st_size / 1048576.0 : 0.0;
+            /* 从 WAV 头算时长：data 字节数 / byte_rate */
+            double dur = 0.0; unsigned bits = 0;
+            { FILE *wf = fopen(path, "rb");
+              if(wf){
+                  unsigned char h[44];
+                  if(fread(h, 1, 44, wf) == 44){
+                      unsigned long br = h[28]|(h[29]<<8)|(h[30]<<16)|((unsigned long)h[31]<<24);
+                      unsigned long dl = h[40]|(h[41]<<8)|(h[42]<<16)|((unsigned long)h[43]<<24);
+                      bits = h[34]|(h[35]<<8);
+                      if(br) dur = (double)dl / (double)br;
+                  }
+                  fclose(wf);
+              } }
             char mk[710]; struct stat mst;
             snprintf(mk, sizeof mk, "%s.marks", path);
             int has = (stat(mk, &mst) == 0 && mst.st_size > 0);
+            unsigned ds = (unsigned)(dur + 0.5);
             off += snprintf(body+off,65536-off,
                 "<tr><td><input class=cb type=checkbox name=f value=\"%s\"></td>"
-                "<td><a href=\"/%s\">%s</a></td><td class=sz>%.1f MB</td><td class=sz>%s</td></tr>",
-                names[i], names[i], names[i], mb, has ? "MARK" : "");
+                "<td><a href=\"/%s\">%s</a></td>"
+                "<td class=sz>%u:%02u:%02u</td><td class=sz>%.1f MB</td><td class=sz>%s</td>"
+                "<td class=sz><button type=button class=pl onclick=\"return prev('%s')\">&#9654;</button></td></tr>",
+                names[i], names[i], names[i], ds/3600, (ds/60)%60, ds%60, mb, has ? "MARK" : "", names[i]);
         }
     }
     off += snprintf(body+off,65536-off,
         "</table><p><button class=del type=submit>删除选中</button></p></form>"
         "<p class=sz>只列出并可删除本目录下的 .wav；删除会连同 .marks 一起删。"
-        "HTTP 服务没有认证，请在可信网络内使用。</p></body></html>");
+        "HTTP 服务没有认证，请在可信网络内使用。</p>"
+        "<p class=sz>预览用浏览器自带播放器：16-bit WAV 各浏览器都能放；24-bit WAV 在 Chrome/Edge/Firefox 可放，"
+        "iOS/Safari 可能不支持（可以在设备上把格式切成 48k/16bit 后重录，或先下载再听）。</p></body></html>");
     int n=snprintf(head,sizeof head,
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n", off);
