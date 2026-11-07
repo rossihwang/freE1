@@ -11,7 +11,7 @@
 #     需要保住采集时加 --keep-recording，此时只重启 freE1 本体
 set -euo pipefail
 
-HOST=root@192.168.3.89
+HOST=${E1_HOST:-root@192.168.3.89}   # 可 export E1_HOST=root@<设备IP> 覆盖
 KEY="$(dirname "$0")/../../.e1work/ssh/id_ed25519"
 BIN="$(dirname "$0")/../build_e1ui/freE1"
 LAUNCH="$(dirname "$0")/../scripts/e1ui-launch.sh"

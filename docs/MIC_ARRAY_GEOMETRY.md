@@ -102,10 +102,10 @@
 
 ```bash
 # 设备端开 RAW 8CH 采集（900 s 上限；连按两次 STOP 才停）
-ssh root@192.168.3.89 'printf "geo 900" > /mnt/sdcard/freE1/.cmd'
+ssh ${E1_HOST:-root@<设备IP>} 'printf "geo 900" > /mnt/sdcard/freE1/.cmd'
 # 声源 0.5 m、与设备同高，绕设备走一整圈（约 30 s），期间不停播放
-ssh root@192.168.3.89 'printf "geostop" > /mnt/sdcard/freE1/.cmd'
-ssh root@192.168.3.89 'cat /mnt/sdcard/geo/geo.wav' > lap.wav
+ssh ${E1_HOST:-root@<设备IP>} 'printf "geostop" > /mnt/sdcard/freE1/.cmd'
+ssh ${E1_HOST:-root@<设备IP>} 'cat /mnt/sdcard/geo/geo.wav' > lap.wav
 
 # 绕圈幅度法（推荐）
 ./scripts/geo-tdoa.py lap.wav --amplitude --plot mics.png --save mics.json

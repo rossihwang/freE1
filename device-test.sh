@@ -2,7 +2,7 @@
 # 10 h 长测结束后，设备端验收：长测核对 → 设备真实采集 → 中途 kill -9 恢复
 # 用法: ./freE1/device-test.sh   （需要在 sogou_e1 目录下，设备 WiFi 在线）
 set -u
-HOST=root@192.168.3.89
+HOST=${E1_HOST:-root@192.168.3.89}   # 可 export E1_HOST=root@<设备IP> 覆盖
 KEY=.e1work/ssh/id_ed25519
 SSH="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=6 $HOST"
 r(){ $SSH "$@" 2>/dev/null; }

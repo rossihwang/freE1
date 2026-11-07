@@ -4,7 +4,7 @@
 #   ./freE1/device-app.sh disable    # 移除 launcher，恢复原厂 App
 #   ./freE1/device-app.sh status
 set -u
-HOST=root@192.168.3.89
+HOST=${E1_HOST:-root@192.168.3.89}   # 可 export E1_HOST=root@<设备IP> 覆盖
 KEY=.e1work/ssh/id_ed25519
 S="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=6 $HOST"
 cmd=${1:-status}

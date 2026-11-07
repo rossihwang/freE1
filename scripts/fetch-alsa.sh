@@ -3,7 +3,7 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT="$ROOT/cross/out/alsa"
-DEV=${1:-root@192.168.3.89}
+DEV=${1:-${E1_HOST:-root@192.168.3.89}}
 KEY="$ROOT/.e1work/ssh/id_ed25519"
 mkdir -p "$OUT/include"
 if [ ! -f "$OUT/libasound.so.2.0.0" ]; then

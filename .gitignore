@@ -18,3 +18,7 @@ shots/*.raw
 *.cmd
 *.wav
 *.csv
+
+# Python
+__pycache__/
+*.pyc

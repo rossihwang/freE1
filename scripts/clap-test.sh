@@ -2,7 +2,7 @@
 # 拍手测试：设备上录 5 分钟 8ch，然后本地分析方向性 + 几何
 # 用法: ./freE1/scripts/clap-test.sh
 set -u
-HOST=root@192.168.3.89
+HOST=${E1_HOST:-root@192.168.3.89}   # 可 export E1_HOST=root@<设备IP> 覆盖
 KEY=.e1work/ssh/id_ed25519
 S="ssh -i $KEY -o StrictHostKeyChecking=no -o ConnectTimeout=6 $HOST"
 OUT=verify/cap/clap_$(date +%H%M).wav
