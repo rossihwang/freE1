@@ -121,7 +121,7 @@ static void meters_reset(void){
 static int64_t g_ignore_tap_until = 0;   /* 弹层刚关：这段时间内的点击一律忽略 */
 static int tap_ok(void){ return !hal_input_last_drag() && mono_ms() > g_ignore_tap_until; }
 static void tap_guard(void){ g_ignore_tap_until = mono_ms() + 400; }
-static void reset_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); meters_reset(); }
+static void reset_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); meters_reset(); rec_clear_clip(); }
 
 static lv_obj_t *chart, *ser1, *ser2;
 static lv_obj_t *rec_btn, *rec_lbl;
@@ -591,6 +591,34 @@ static void led_set(int on){
     hs_led_top(true);
     hs_led_color(on ? 1 : 2);        /* 1=红 2=绿 */
     hs_led_pwm(on ? 200 : 80);
+}
+/* 录音中按峰值情况给 LED 分三档（只改变化，别每个 tick 都写 /proc）：
+     0 正常录音  红、暗
+     1 限制器介入（>0.9）  黄、常亮
+     2 ADC 削顶（>=0.99）  红、闪                                   */
+static void rec_led_update(void);
+static void rec_led_tick(lv_timer_t *t){ (void)t; rec_led_update(); }
+static void rec_led_update(void){
+    static int last = -1;
+    int want;
+    if(!engine_running()) want = -1;                 /* 非录音：交给 led_set 管 */
+    else {
+        int cs = rec_clip_state();
+        want = (cs == 2) ? 2 : (cs == 1 ? 1 : 0);
+    }
+    if(want == last) {
+        if(want == 2){                                /* 削顶要闪，所以每帧都要改 pwm */
+            hs_led_top(true); hs_led_color(1);
+            hs_led_pwm(((mono_ms() / 200) & 1) ? 240 : 20);
+        }
+        return;
+    }
+    last = want;
+    if(want < 0) return;
+    hs_led_top(true);
+    if(want == 2){ hs_led_color(1); hs_led_pwm(240); logmsg("led: CLIP (adc saturated)"); }
+    else if(want == 1){ hs_led_color(4); hs_led_pwm(200); logmsg("led: limiter engaged"); }
+    else { hs_led_color(1); hs_led_pwm(60); }
 }
 /* 录音时禁止一切振动：马达是结构声，直接耦合进 PDM 麦克风被录下来。
    需要反馈就用 LED（无声）；停止录音后再允许振动。 */
@@ -1243,6 +1271,7 @@ static void poll_cmd(void){
         if(sscanf(b+4,"%d %d",&c,&pr)==2) ui_on_hw_key(c, pr);
     }
     else if(!strncmp(b,"vol ",4)){ int v=atoi(b+4); if(v>=0&&v<=100){ g_vol=v; vol_apply(); vol_save(); } }
+    else if(!strncmp(b,"clipsim ",8)){ rec_debug_clip(atoi(b+8)); logmsg("test: clipsim %d", atoi(b+8)); }
     else if(!strncmp(b,"ff ",3)){                         /* ff 1 = 开始快进，ff 0 = 停止 */
         if(atoi(b+3)) ff_start(g_play_file); else { ff_stop(); logmsg("play: fast-forward stop"); }
     }
@@ -1979,6 +2008,7 @@ int ui_run_device(const char *dir, int http_port){
     }
     ui_activity();
     lv_timer_create(ui_tick,200,NULL);
+    lv_timer_create(rec_led_tick, 100, NULL);   /* LED 状态：红闪要 ~5 Hz 刷新 */
     logmsg("device UI up: dir=%s http=%d", g_dir, g_http_port);
     while(1){ lv_timer_handler(); usleep(5000); }
     return 0;
@@ -2016,6 +2046,7 @@ int ui_run_x11(const char *dir, int device, int http_port){
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     lv_timer_create(ui_tick,200,NULL);
+    lv_timer_create(rec_led_tick, 100, NULL);   /* LED 状态：红闪需要 ~5 Hz 刷新 */
     logmsg("UI running - drag left/right: pages, click REC/mode. HTTP:%s", g_http_port? "on":"off");
     while(1){ lv_timer_handler(); usleep(5000); }
     return 0;

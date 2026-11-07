@@ -40,6 +40,14 @@ static void *sync_worker(void *p)
 
 /* 直流阻断 + 块级 AGC（目标 -24 dBFS，最大 +42 dB，静音不抬增益） */
 typedef struct { double gain; double x1[2], y1[2]; } proc_t;
+/* 给 UI 读的"到顶"标志：软 = 限制器压了（gain*peak > 0.9），硬 = 送进 AGC 之前就已经贴满量程
+   （那是 ADC 削顶，软件救不回来，只能提示用户离远点）。clear 由 UI 在复位音量条时调用。 */
+static volatile int  g_clip_soft, g_clip_hard;
+
+int  rec_clip_state(void){ return g_clip_hard ? 2 : (g_clip_soft ? 1 : 0); }
+void rec_clear_clip(void){ g_clip_soft = 0; g_clip_hard = 0; }
+/* 调试用：直接置位到顶标志（真实触发需要对着麦克风喊/拍手），验证 LED 三档 */
+void rec_debug_clip(int level){ rec_clear_clip(); if(level==2) g_clip_hard=1; else if(level==1) g_clip_soft=1; }
 
 static void agc_process(int32_t *buf, int n, int nch, const int map[2], proc_t *p){
     static double tmp[1024*2];
@@ -55,6 +63,8 @@ static void agc_process(int32_t *buf, int n, int nch, const int map[2], proc_t *
             acc += y*y;
         }
     }
+    /* 硬：处理前就贴顶（|x| >= 0.99 满量程）——真正的 ADC 削顶 */
+    for(int i=0;i<n*2;i++){ double a = tmp[i]; if(a<0) a=-a; if(a >= 0.99) { g_clip_hard = 1; break; } }
     double rms = sqrt(acc / (double)(n*2));
     const double target = 0.0631;               /* -24 dBFS */
     /* 噪声门限：低于 -55 dBFS 视为静音，冻结增益，避免把底噪抬上来 */
@@ -66,7 +76,7 @@ static void agc_process(int32_t *buf, int n, int nch, const int map[2], proc_t *
     /* 峰值感知：增益不许把本块峰值顶过 0.9（瞬时下压，不缩整块） */
     double peak = 0;
     for(int i=0;i<n*2;i++){ double a = tmp[i]; if(a<0) a=-a; if(a>peak) peak=a; }
-    if(peak > 1e-9 && p->gain * peak > 0.9) p->gain = 0.9 / peak;
+    if(peak > 1e-9 && p->gain * peak > 0.9){ p->gain = 0.9 / peak; g_clip_soft = 1; }   /* 软：限制器介入 */
     double g = p->gain;
     for(int i=0;i<n;i++){
         for(int kk=0;kk<2;kk++){
@@ -150,6 +160,7 @@ int rec_run(rec_cfg *cfg){
                                    : audio_open_sim(cfg->nch_in,cfg->rate);
     if(!a){ logmsg("audio open failed"); if(cfg->status) cfg->status->failed=1; return -1; }
     rec_status *st = cfg->status;
+    g_clip_soft = 0; g_clip_hard = 0;      /* 新录音从干净状态开始 */
     if(st){ st->running=1; st->recording=1; }
 
     enum { CHUNK=1024 };
