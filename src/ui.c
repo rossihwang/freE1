@@ -1157,6 +1157,9 @@ static void ui_tick(lv_timer_t *t){
             logmsg("hwtest: exited, reclaim scheduled");
         }
     }
+    { static int last_del = 0;
+      int ds = http_delete_seq();
+      if(ds != last_del){ last_del = ds; if(page_idx == 1) files_refresh(); } }
     play_state_t ps;
     play_get_state(&ps);
     { static int was_active = 0;

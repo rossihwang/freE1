@@ -21,6 +21,9 @@ static volatile int g_run = 0;
 static int g_port = 0;
 static char g_root[400];
 static int g_lfd = -1;
+static volatile int g_del_seq = 0;   /* 每次 HTTP 删除 +1，UI 据此刷新文件列表 */
+static void add_deleted(const char *name){ (void)name; g_del_seq++; }
+int http_delete_seq(void){ return g_del_seq; }
 
 static int send_all(int fd, const char *buf, size_t n){
     size_t off=0;
@@ -35,25 +38,147 @@ static void send_err(int fd, int code, const char *msg){
     send_all(fd,b,n);
 }
 
-static void list_html(int fd, const char *root){
-    char head[512], body[8192]; size_t off=0;
-    off += snprintf(body+off,sizeof body-off,
-        "<html><head><meta charset=utf-8><title>freE1</title>"
-        "<style>body{background:#0b0d12;color:#e8e8e9;font:14px monospace}a{color:#3cff7a}</style></head><body>"
-        "<h3>freE1 recordings</h3><ul>");
-    DIR *d=opendir(root);
+
+static void redirect(int fd, const char *loc){
+    char b[256];
+    int n=snprintf(b,sizeof b,"HTTP/1.1 303 See Other\r\nLocation: %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", loc);
+    send_all(fd,b,n);
+}
+
+/* HTTP 服务没有认证，能连上就能删文件；所以只允许删"当前目录里真实存在的 .wav"：
+   不接受路径分隔符、不接受 ..、必须以 .wav 结尾。 */
+static int safe_wav_name(const char *n){
+    if(!n || !n[0] || strlen(n) > 200) return 0;
+    if(strchr(n,'/') || strstr(n,"..")) return 0;
+    size_t l = strlen(n);
+    if(l < 5 || strcmp(n + l - 4, ".wav") != 0) return 0;
+    return 1;
+}
+
+static void url_decode(char *s){
+    char *o = s;
+    for(char *p = s; *p; p++){
+        if(*p == '+'){ *o++ = ' '; }
+        else if(*p == '%' && p[1] && p[2]){
+            char h[3] = { p[1], p[2], 0 };
+            *o++ = (char)strtol(h, NULL, 16);
+            p += 2;
+        } else *o++ = *p;
+    }
+    *o = 0;
+}
+
+static int del_one(const char *name){
+    if(!safe_wav_name(name)) return 0;
+    char path[700];
+    snprintf(path, sizeof path, "%s/%s", g_root, name);
+    struct stat st;
+    if(stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return 0;
+    if(unlink(path) != 0) return 0;
+    char mk[710];
+    snprintf(mk, sizeof mk, "%s.marks", path);
+    unlink(mk);                     /* 标记 sidecar 一起删 */
+    add_deleted(name);
+    logmsg("http: deleted %s", name);
+    return 1;
+}
+
+/* 支持 /delete?f=a.wav&f=b.wav 也支持 ?f=a.wav,b.wav */
+static void do_delete(int fd, const char *query){
+    int done = 0, fail = 0;
+    if(query){
+        char q[4096];
+        snprintf(q, sizeof q, "%s", query);
+        char *save = NULL;
+        for(char *kv = strtok_r(q, "&", &save); kv; kv = strtok_r(NULL, "&", &save)){
+            if(strncmp(kv, "f=", 2)) continue;
+            char *v = kv + 2;
+            url_decode(v);
+            char *sv = NULL;
+            for(char *one = strtok_r(v, ",", &sv); one; one = strtok_r(NULL, ",", &sv)){
+                if(del_one(one)) done++; else fail++;
+            }
+        }
+    }
+    sync();                         /* 别让删除只停在页缓存里 */
+    char loc[128];
+    snprintf(loc, sizeof loc, "/?del=%d&fail=%d", done, fail);
+    redirect(fd, loc);
+}
+
+static void list_html(int fd, const char *root, const char *query){
+    int del = 0, fail = 0;
+    if(query){
+        const char *p = strstr(query, "del=");  if(p) del = atoi(p + 4);
+        p = strstr(query, "fail=");             if(p) fail = atoi(p + 4);
+    }
+    char head[512]; char *body = malloc(65536); size_t off = 0;
+    if(!body){ send_err(fd,500,"oom"); return; }
+    off += snprintf(body+off,65536-off,
+        "<!DOCTYPE html><html><head><meta charset=utf-8>"
+        "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+        "<title>freE1</title><style>"
+        "body{background:#0b0d12;color:#e8e8e9;font:14px/1.5 monospace;margin:16px}"
+        "a{color:#3cff7a;text-decoration:none}"
+        "table{border-collapse:collapse;width:100%%}"
+        "td,th{padding:8px 4px;border-bottom:1px solid #222}"
+        "th{color:#8a8f98;font-weight:normal;text-align:left}"
+        ".sz{color:#8a8f98;white-space:nowrap}"
+        "button{background:#2e7d50;color:#08180f;border:0;border-radius:8px;padding:12px 18px;font:15px monospace}"
+        "button.del{background:#c0392b;color:#fff}"
+        ".msg{padding:8px 12px;border-radius:8px;margin-bottom:12px;background:#16241c;color:#3cff7a}"
+        "input[type=checkbox]{width:20px;height:20px}"
+        "</style></head><body><h3>freE1 recordings</h3>");
+
+    if(del || fail){
+        off += snprintf(body+off,65536-off,"<div class=msg>已删除 %d 个文件%s</div>",
+                        del, fail ? "，部分被跳过（名字非法或已不存在）" : "");
+    }
+
+    off += snprintf(body+off,65536-off,
+        "<form method=GET action=/delete onsubmit=\"return confirm('删除选中的文件？不可恢复')\">"
+        "<table><tr>"
+        "<th><input type=checkbox id=all onclick=\"for(const c of document.querySelectorAll('input.cb'))c.checked=this.checked\"></th>"
+        "<th>文件</th><th class=sz>大小</th><th class=sz>标记</th></tr>");
+
+    DIR *d = opendir(root);
     if(d){
+        static char names[160][200];
+        int nn = 0;
         struct dirent *e;
-        while((e=readdir(d)) && off<sizeof body-256){
-            if(strstr(e->d_name,".wav")==NULL) continue;
-            off += snprintf(body+off,sizeof body-off,"<li><a href=\"/%s\">%s</a></li>", e->d_name, e->d_name);
+        while((e=readdir(d)) && nn < 160){
+            if(!safe_wav_name(e->d_name)) continue;
+            snprintf(names[nn++], 200, "%s", e->d_name);
         }
         closedir(d);
+        for(int a = 0; a < nn; a++)          /* 新的放前面 */
+            for(int b = a + 1; b < nn; b++)
+                if(strcmp(names[a], names[b]) < 0){
+                    char t[200]; snprintf(t,sizeof t,"%s",names[a]);
+                    snprintf(names[a],200,"%s",names[b]); snprintf(names[b],200,"%s",t);
+                }
+        for(int i = 0; i < nn && off < 65536 - 600; i++){
+            char path[700]; struct stat st;
+            snprintf(path, sizeof path, "%s/%s", root, names[i]);
+            double mb = (stat(path, &st) == 0) ? st.st_size / 1048576.0 : 0.0;
+            char mk[710]; struct stat mst;
+            snprintf(mk, sizeof mk, "%s.marks", path);
+            int has = (stat(mk, &mst) == 0 && mst.st_size > 0);
+            off += snprintf(body+off,65536-off,
+                "<tr><td><input class=cb type=checkbox name=f value=\"%s\"></td>"
+                "<td><a href=\"/%s\">%s</a></td><td class=sz>%.1f MB</td><td class=sz>%s</td></tr>",
+                names[i], names[i], names[i], mb, has ? "MARK" : "");
+        }
     }
-    off += snprintf(body+off,sizeof body-off,"</ul><p>HTTP export is read-only.</p></body></html>");
+    off += snprintf(body+off,65536-off,
+        "</table><p><button class=del type=submit>删除选中</button></p></form>"
+        "<p class=sz>只列出并可删除本目录下的 .wav；删除会连同 .marks 一起删。"
+        "HTTP 服务没有认证，请在可信网络内使用。</p></body></html>");
     int n=snprintf(head,sizeof head,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n", off);
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n", off);
     send_all(fd,head,n); send_all(fd,body,off);
+    free(body);
 }
 
 static void serve_file(int fd, const char *root, const char *name, const char *range){
@@ -118,18 +243,32 @@ static void *http_thread(void *arg){
 }
 
 static void handle_conn(int fd){
-    char req[2048]; ssize_t n=recv(fd,req,sizeof req-1,0);
-    if(n<=0){ close(fd); return; }
-    req[n]=0;
-    char method[8], path[512];
-    if(sscanf(req,"%7s %511s",method,path)!=2){ close(fd); return; }
+    /* 请求行可能超过一次 recv：读到空行为止，最多 8 KB */
+    static char req[8192];
+    size_t got = 0;
+    while(got < sizeof req - 1){
+        ssize_t n = recv(fd, req + got, sizeof req - 1 - got, 0);
+        if(n <= 0) break;
+        got += (size_t)n;
+        req[got] = 0;
+        if(strstr(req, "\r\n\r\n") || strstr(req, "\n\n")) break;
+    }
+    if(got == 0){ close(fd); return; }
+    req[got] = 0;
+    char method[8], rawpath[2048];
+    if(sscanf(req, "%7s %2047s", method, rawpath) != 2){ close(fd); return; }
     char *range=NULL;
     { char *r=strstr(req,"Range:"); if(r){ range=r; char *e=strstr(r,"\r\n"); if(e) *e=0; } }
-    if(!strcmp(path,"/")) list_html(fd,g_root);
+
+    char *query = NULL;
+    { char *q = strchr(rawpath, '?'); if(q){ *q = 0; query = q + 1; } }
+
+    if(!strcmp(rawpath,"/")) list_html(fd, g_root, query);
+    else if(!strcmp(rawpath,"/delete")) do_delete(fd, query);
     else {
-        const char *name=path+1;
+        const char *name=rawpath+1;
         if(!strncmp(name,"files/",6)) name+=6;
-        serve_file(fd,g_root,name,range);
+        serve_file(fd, g_root, name, range);
     }
     close(fd);
 }
