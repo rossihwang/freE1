@@ -250,6 +250,23 @@ static void clock_restore(void){
     }
     fclose(f);
 }
+/* 板上有 RTC（RK808 PMIC 内置，/dev/rtc0，内核 hctosys=1 = 开机直接拿它当系统时间），
+   但出厂后一直没人往里写过，所以每次开机都是 2019-10-04，直到 NTP 校时。
+   这里定期把系统时间写回去：差值超过 1 分钟才写，避免无谓的 I2C 操作。 */
+static void rtc_sync_if_needed(int force){
+    FILE *f = fopen("/sys/class/rtc/rtc0/since_epoch", "r");
+    if(!f) return;
+    long long rtc = 0; int ok = fscanf(f, "%lld", &rtc) == 1; fclose(f);
+    if(!ok) return;
+    long long now = (long long)time(NULL);
+    if(now < 1704067200LL) return;         /* 系统时间还不可信（<2024）：别把坏时间写进 RTC */
+    long long d = now - rtc;
+    if(d < 0) d = -d;
+    if(!force && d <= 60) return;
+    int rc = system("hwclock -u -w >/dev/null 2>&1");   /* -u：RTC 里存 UTC，内核按 UTC 读 */
+    logmsg("rtc: %s (rtc %lld, sys %lld, rc %d)", rc == 0 ? "synced" : "write failed", rtc, now, rc);
+}
+
 static void clock_save(void){
     char path[512]; snprintf(path,sizeof path,"%s/last_time", g_dir);
     long long now = (long long)time(NULL), old = 0;
@@ -1276,6 +1293,7 @@ static void poll_cmd(void){
         if(sscanf(b+4,"%d %d",&c,&pr)==2) ui_on_hw_key(c, pr);
     }
     else if(!strncmp(b,"vol ",4)){ int v=atoi(b+4); if(v>=0&&v<=100){ g_vol=v; vol_apply(); vol_save(); } }
+    else if(!strcmp(b,"rtcsync")){ rtc_sync_if_needed(1); }
     else if(!strncmp(b,"clipsim ",8)){ rec_debug_clip(atoi(b+8)); logmsg("test: clipsim %d", atoi(b+8)); }
     else if(!strncmp(b,"ff ",3)){                         /* ff 1 = 开始快进，ff 0 = 停止 */
         if(atoi(b+3)) ff_start(g_play_file); else { ff_stop(); logmsg("play: fast-forward stop"); }
@@ -1429,6 +1447,7 @@ static void ui_tick(lv_timer_t *t){
           if(files_hdr) lv_label_set_text(files_hdr, engine_running()?"REC":"");
           { static int n=0; if(++n % 5 == 0){ int a = adb_running(); if(a != g_adb_on){ g_adb_on = a; adb_set_value(a); } } }
           { static int n=0; if(++n % 60 == 0) clock_save(); }
+          { static int n=0; if(++n % 600 == 0) rtc_sync_if_needed(0); }
           if(http_val && g_http_port){
               char ip[32];
               char want[48];
@@ -1974,6 +1993,7 @@ int ui_run_device(const char *dir, int http_port){
     g_start_ms = mono_ms();
     { int n=rec_recover(g_dir); if(n) logmsg("startup: recovered %d file(s)",n); }
     clock_restore();
+    rtc_sync_if_needed(0);
     idle_load();
     fmt_load();
     mode_load();
