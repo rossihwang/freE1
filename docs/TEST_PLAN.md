@@ -98,3 +98,88 @@ touches. `set_rec_ui(0)` now resets the idle state. Retested with a 76 s
 recording and the screen off: no suspend line after the stop.
 
 Two ~1 GB test recordings are still on the card (`REC_0112`, `REC_0113`).
+
+## 8. LED peak indication (2026-11-07)
+
+The top RGB LED stays dark unless the level written to the file is close to full
+scale. Thresholds are on the post-AGC peak, not on the limiter's internal state.
+
+| Level | LED |
+|---|---|
+| below 0.7 FS | off |
+| **0.7 FS** (-3 dBFS) or above | yellow, steady |
+| **0.9 FS** or above | red, steady |
+| tap the meter area | back to off (also clears the amber peak-hold marks) |
+| stop recording / standby | off |
+
+**Result (2026-11-07):** states verified with `clipsim 0|1|2` (`test: clipsim N`
+in the log), reading `/proc/awled_enable|color|pwm` each time: off = `0/-/-`,
+yellow = `1/4/200`, red = `1/1/240`, reset and stop = `0/-/-`. A real burst played
+through the speaker only reached 0.386 FS and correctly lit nothing, so the
+thresholds are not decorative - a real 0.7 event needs someone talking loudly
+right at the array.
+
+Two driver details had to be learned the hard way:
+- writing `awled_color` or `awled_pwm` clears `awled_enable`, so the order must be
+  colour, brightness, enable;
+- `awled_enable` and `awled_pwm` read back as defaults (0 / 127) whenever the LED
+  is off, which looks like a failed write but is not.
+
+## 9. Volume keys (2026-11-07)
+
+| Step | Expected |
+|---|---|
+| Press volume up / down | 5% steps, toast `VOL nn%`, softvol `Master` follows |
+| Reboot | level restored from `volume` |
+
+**Result (2026-11-07):** works. The device has five keys; the two volume keys
+(`KEY_4`/`KEY_5`, codes 5/6) had no handler before. `vol 40` moved `Master` to
+40% (-24 dB), `vol 70` to 70% (-12 dB), and the value survives a restart. The
+monitor path bypasses softvol (it opens `hw:0,0` directly), so volume keys do not
+change monitoring level.
+
+## 10. Fast-forward by holding the playing row (2026-11-07)
+
+| Step | Expected |
+|---|---|
+| Tap a file, then hold the same row | Scans forward at ~4x, toast `FF 4x` |
+| Release | Back to normal speed at the new position |
+| Long-press a row that is not playing | Delete dialog, as before |
+
+**Result (2026-11-07):** 25 s take played in 24.2 s normally and 6.4 s with the
+scan held (3.8x). The scan advances the file position inside the player instead
+of seeking, so the PCM stream is never reconfigured and it does not click.
+
+## 11. Clock drift and list ordering (2026-11-07)
+
+A 1.5 h recording appeared to be missing. It was not: `REC_0154` held exactly
+3600.0 s and `REC_0155` the remaining 705 s, but the RTC has no backup battery, so
+after a power cycle the clock was 2019 and every file from that session carried a
+2019 timestamp. Sorting by mtime pushed the newest takes to the bottom of a
+24-file list.
+
+| Check | Expected | Measured |
+|---|---|---|
+| Sort order | by sequence number, not mtime | `0157 → 0156 → 0155 → 0154 …` |
+| Clock at boot | restored from `last_time` when the RTC is behind | `clock: implausible (2019)` then `clock: restored 1570186800 -> 1794050702` |
+| `last_time` monotonic | never overwritten with an earlier value | written at most once a minute, only forwards |
+
+## 12. HTTP page (2026-11-07)
+
+| Check | Expected | Result |
+|---|---|---|
+| Preview in the browser | play button per row, streams via Range | 206 with `Content-Range`, `Accept-Ranges: bytes` |
+| Delete a selection | POST with the page token, files and `.marks` removed | `?del=2&fail=0`, both files and sidecars gone |
+| `GET /delete` | refused | 405 |
+| POST without token | refused | 403 |
+| Traversal name (`../system/SogouE1`) | refused, file untouched | `del=0&fail=1`, launcher md5 unchanged |
+| Device list refresh | Files page updates without paging | list refreshed after an HTTP delete |
+
+## 13. hwtest navigation (2026-11-07)
+
+Single-finger drag used to scroll the whole page (LVGL screens are scrollable by
+default and the content is taller than 320 px); the five page dots along the
+bottom sat on top of page content. Both are gone, pages are sized to the full
+height below the title bar, and the `2-finger swipe` hint that overlapped the
+buttons was removed with them. Verify by eye: no dots, and dragging on the touch
+grid paints cells instead of moving the page.

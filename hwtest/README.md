@@ -13,19 +13,19 @@
 ## 1. 快速使用
 
 ```bash
-# 交叉编译（首次需要先取 LVGL，见 §5）
-source cross/env.sh
-cd hwtest && make -j8
+# 交叉编译（首次需要先取 LVGL，见 §5；工具链不在本仓库）
+export PATH=<你的交叉工具链>/bin:$PATH
+make -j8                        # 产物 build/e1hwtest
 
-# 装进设备：推二进制 + 写启动钩子 + 切走原厂 App
-../scripts/e1-hwtest.sh install
+# 装进设备（设备地址/私钥见仓库根 README 的 e1env 配置）
+. ./e1env
+SSH="ssh -i $E1_KEY $E1_HOST"
+$SSH 'mkdir -p /mnt/sdcard/e1hwtest'
+$SSH 'cat > /mnt/sdcard/e1hwtest/e1hwtest && chmod +x /mnt/sdcard/e1hwtest/e1hwtest' < build/e1hwtest
 
-# 只看状态 / 看日志
-../scripts/e1-hwtest.sh status
-../scripts/e1-hwtest.sh logs
-
-# 一键恢复原厂
-../scripts/e1-hwtest.sh restore
+# 运行：freE1 设置页 → Hardware test（推荐，退出后自动回到设置页）
+# 或独立运行（自己接管屏幕）：
+$SSH 'pkill -x arecord; /mnt/sdcard/e1hwtest/e1hwtest'
 ```
 
 设备上还有两个兜底手段（**adb 不依赖原厂 App**，已实测）：
@@ -50,7 +50,8 @@ ssh root@<ip> 'rm /userdata/system/SogouE1; killall e1hwtest'  # WiFi 起来后�
 | 5 VIBRATE | SHORT / DOUBLE / LONG | 手持确认 | 触发次数 |
 | 6 SUMMARY | 5 项判定 + 证据 + SN/CPU | `FINISH` 落盘并回原厂 | — |
 
-- **翻页**：任意位置**双指**上下滑（单指全部留给测试内容）；也可以直接点底部圆点。
+- **翻页**：任意位置**双指**上下滑（单指全部留给测试内容）。页面不滚动、底部没有指示点：
+  单指拖动以前会把整页拖着走，底部圆点又压在内容上，两者都已去掉。
 - **判定**：每页右下 `PASS` / `FAIL`，结果进入汇总页；未判定的项在报告里是 `SKIP`。
 - **耳机**：插入时状态栏显示 `HP IN`，回放自动走耳机（喇叭被硬件静音）；拔出显示 `HP OUT`。
 - **麦克风位置**（文档实测）：
@@ -193,13 +194,12 @@ echo 1296000 > /sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq
 需要 `cross/` 里那套 Bootlin aarch64 工具链（gcc 6.4 / glibc 2.26）：
 
 ```bash
-cd hwtest
 make deps          # 从 gitee 镜像取 LVGL v9.2.2（约 200 MB）
-source ../cross/env.sh
+export PATH=<你的交叉工具链>/bin:$PATH
 make -j8
 ```
 
-产物 `build/e1hwtest`：静态链接、无 GLIBC 符号版本需求（`cross/verify.sh` 可复核）。
+产物 `build/e1hwtest`：静态链接、无 GLIBC 符号版本需求（用交叉工具链自带的 `readelf -V` 可复核）。
 
 ## 9. 报告
 
