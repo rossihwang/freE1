@@ -403,6 +403,7 @@ static void show_page(int p){
 }
 
 
+static void ui_activity(void);   /* 定义在后面 */
 static void set_rec_ui(int on){
     if(recording != on){ led_set(on); motor_pulse(); }
     recording = on;
@@ -432,6 +433,10 @@ static void set_rec_ui(int on){
         }
         if(dbfs_lbl) lv_label_set_text(dbfs_lbl, "-- dBFS");
         if(g_mode_btn){ lv_obj_add_flag(g_mode_btn, LV_OBJ_FLAG_CLICKABLE); apply_mode(); }
+        /* 录音时屏幕早已自动熄灭，g_off_at 是很久以前的值；停止后不重置的话，
+           下一个 tick 就会认为"熄屏已超过 180 s"而立即进入休眠（实测停录后 1 ms 就睡）。 */
+        ui_activity();
+        g_off_at = 0;
     } else if(chart){
         lv_obj_remove_flag(chart, LV_OBJ_FLAG_HIDDEN);
     }

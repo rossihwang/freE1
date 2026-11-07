@@ -76,3 +76,25 @@ the previously saved psk back instead of deleting the network.
 **Done (2026-11-07).** Measured with the RAW 8CH mode and a click train: six omni
 mics in two rows of three, 64 × 25 mm, columns ~30 mm apart, rows ~20 mm. See
 `MIC_ARRAY_GEOMETRY.md`. ch6/ch7 turned out not to behave like array elements.
+
+## 7. One-hour segment rotation (2026-11-07)
+
+Started 00:26:35 on battery, stopped 01:33:44 (67 min).
+
+| Check | Expected | Measured |
+|---|---|---|
+| First segment length | 3600.0 s | **3600.0 s** (`REC_0112`, 1,728,010,024 frames, 1.04 GB) |
+| Rotation to a new file | sequence +1, new name | `REC_0113_20261107-0126.wav` |
+| Second segment | remainder | 429.4 s, stopped by the STOP key |
+| xrun / read failures | 0 | **0** |
+| Battery | — | 99% → 91% in 67 min of 24-bit recording (USB unplugged) |
+| UI RSS after 8.8 h uptime | flat | 3.1 MB |
+
+**Bug found and fixed:** the screen goes off 60 s into a recording and `g_off_at`
+keeps that timestamp, so the moment STOP cleared the "recording" guard the idle
+check saw "screen off for over 180 s" and suspended the device 1 ms after the
+key press - from the outside a stopped recorder that blacks out and ignores
+touches. `set_rec_ui(0)` now resets the idle state. Retested with a 76 s
+recording and the screen off: no suspend line after the stop.
+
+Two ~1 GB test recordings are still on the card (`REC_0112`, `REC_0113`).
