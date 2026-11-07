@@ -9,6 +9,7 @@ typedef struct {
     volatile int levels[8];     /* 0..100 */
     volatile int db_dbfs;       /* -72..0 */
     volatile unsigned long long frames;
+    char seg[192];              /* 当前分段文件名（不含目录），打点要写同名 .marks */
 } rec_status;
 
 typedef struct {

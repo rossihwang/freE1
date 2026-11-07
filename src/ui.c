@@ -20,6 +20,7 @@
 #include "wifi_ui.h"
 #include "audio_play.h"
 #include "monitor.h"
+#include "marks.h"
 #include "wifi.h"
 #include "hal_sysfs.h"
 #include <sys/ioctl.h>
@@ -818,6 +819,10 @@ static void files_refresh(void){
                  secs/3600,(secs/60)%60,secs%60,arr[i].size/1048576.0, rs, arr[i].bits);
         lv_obj_t *sb=mk_label(row,sub,&lv_font_montserrat_14, play_row? 0xD8E6DD : C_DIM);
         lv_obj_align(sb,LV_ALIGN_LEFT_MID,12,14);
+        if(marks_has(g_dir, arr[i].name)){
+            lv_obj_t *mb2 = mk_label(row, "MARK", &lv_font_montserrat_14, C_GREEN);
+            lv_obj_align(mb2, LV_ALIGN_TOP_RIGHT, -12, 8);
+        }
         lv_obj_add_flag(row,LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row,del_row_cb,LV_EVENT_LONG_PRESSED,(void*)arr[i].name);
         lv_obj_add_event_cb(row,play_row_cb,LV_EVENT_SHORT_CLICKED,(void*)arr[i].name);
@@ -1084,6 +1089,7 @@ static void poll_cmd(void){
     else if(!strncmp(b,"scrolls ",8)){ if(settings_box) lv_obj_scroll_by(settings_box,0,-atoi(b+8),LV_ANIM_OFF); }
     else if(!strncmp(b,"scrollend",9)){ if(settings_box) lv_obj_scroll_to_y(settings_box, LV_COORD_MAX, LV_ANIM_OFF); }
     else if(!strncmp(b,"rec",3)) toggle_record();
+    else if(!strncmp(b,"mark",4)){ ui_on_hw_key(2,1); ui_on_hw_key(2,0); }   /* 等同按下 MARK 键 */
     else if(!strncmp(b,"pause",5)) rec_pause_cycle();     /* 等同 REC/PAUSE 键 */
     else if(!strncmp(b,"mode ",5)){ if(engine_running()) { logmsg("mode: refused (recording)"); } else { input_mode = atoi(b+5)?1:0; apply_mode(); mode_save(); logmsg("mode -> %d", input_mode); } }
     else if(!strncmp(b,"stopkey",7)) rec_stop_all();      /* 等同 STOP 键 */
@@ -1402,6 +1408,20 @@ int ui_run_shots(const char *dir, const char *outdir){
 
 static lv_obj_t *del_dlg = NULL;
 static char g_del_name[192];
+static lv_obj_t *toast_obj = NULL;
+static void toast_kill_cb(lv_timer_t *t){
+    (void)t;
+    if(toast_obj){ lv_obj_delete(toast_obj); toast_obj = NULL; }
+}
+static void toast(const char *msg){
+    if(toast_obj){ lv_obj_delete(toast_obj); toast_obj = NULL; }
+    toast_obj = mk_panel(lv_screen_active(), 40, 236, W-80, 40, 12, 0x16241C);
+    lv_obj_remove_flag(toast_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_t *l = mk_label(toast_obj, msg, &lv_font_montserrat_14, C_GREEN);
+    lv_obj_center(l);
+    lv_timer_t *t = lv_timer_create(toast_kill_cb, 1500, NULL);
+    lv_timer_set_repeat_count(t, 1);
+}
 static lv_obj_t *warn_dlg = NULL;
 static void warn_close_cb(lv_event_t *e){ (void)e; if(warn_dlg){ lv_obj_delete(warn_dlg); warn_dlg=NULL; } tap_guard(); }
 static void show_warn(const char *msg){
@@ -1434,6 +1454,7 @@ static void del_ok_cb(lv_event_t *e){
     (void)e;
     char path[600]; snprintf(path,sizeof path,"%s/%s",g_dir,g_del_name);
     if(unlink(path)==0) logmsg("deleted %s", g_del_name);
+    marks_remove(g_dir, g_del_name);
     del_dlg_close(); files_refresh();
 }
 /* ---------- 播放：进程内 ALSA，底部播放条 ---------- */
@@ -1602,7 +1623,25 @@ void ui_on_hw_key(int code, int pressed){
     g_idle_handled = 0;
     if(!g_screen_on){ screen_set(1); return; }   /* 灭屏时任何键先唤醒 */
     switch(code){
-    case 2:  logmsg("key: MARK (no action yet)"); break;   /* KEY_1 MARK：不做换页，书签功能待做 */
+    case 2:                                               /* KEY_1 MARK：录音中打点 */
+        if(recording && engine_running()){
+            rec_status *mst = engine_status();
+            if(mst && mst->seg[0]){
+                uint64_t ms = mst->frames * 1000ULL / (uint64_t)FMT_RATE[g_fmt];
+                if(marks_append(g_dir, mst->seg, ms) == 0){
+                    motor_pulse();
+                    char tb[64];
+                    unsigned secs = (unsigned)(ms / 1000);
+                    snprintf(tb, sizeof tb, "MARK %u  %02u:%02u:%02u",
+                             (unsigned)marks_count(g_dir, mst->seg),
+                             secs/3600, (secs/60)%60, secs%60);
+                    toast(tb);
+                } else toast("MARK failed");
+            } else logmsg("marks: no segment yet");
+        } else {
+            logmsg("marks: ignored (not recording)");
+        }
+        break;
     case 3:  rec_stop_all(); break;                         /* KEY_2 STOP：停止录音/暂停，无录音则停回放 */
     case 4:  rec_pause_cycle(); break;                      /* KEY_3 REC/PAUSE：录 → 暂停 → 继续 */
     case 7:  /* KEY_6 POWER：短按亮灭屏，长按 2 s 确认关机 */
