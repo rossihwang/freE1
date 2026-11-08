@@ -553,6 +553,8 @@ static void ui_activity(void){ g_last_activity = mono_ms(); g_off_at = 0; g_idle
 
 /* 深度休眠：只靠电源键唤醒（本机没有任何 wakeup 源注册）
    进入前必须：停录音、sync、记录时间 */
+static int     g_pwr_down, g_pwr_fired, g_pwr_woke;   /* pressed-at / long-press fired / this press only wakes */
+static int64_t g_pwr_swallow_until;
 static void do_suspend(void){
     if(engine_running()) return;                 /* 录音中绝不睡 */
     if(g_geo_on) return;                         /* 原始采集进行中也不睡 */
@@ -572,7 +574,11 @@ static void do_suspend(void){
     g_off_at = 0;
     g_idle_handled = 0;
     g_last_activity = mono_ms();
-    g_ignore_pwr_until = mono_ms() + 1500;   /* 吞掉唤醒那一次按键 */
+    g_ignore_pwr_until = mono_ms() + 1500;   /* 兜底：短时间内不处理电源键 */
+    g_pwr_swallow_until = mono_ms() + 3000;  /* 主手段：把唤醒这对 press/release 整个吞掉 */
+    g_pwr_down = 0;
+    g_pwr_woke = 0;
+    g_pwr_fired = 0;
     logmsg("suspend: resumed");
 
     /* 休眠期间 wpa_supplicant / DHCP 可能掉链，醒来后自检一次 */
@@ -1293,6 +1299,7 @@ static void poll_cmd(void){
         if(sscanf(b+4,"%d %d",&c,&pr)==2) ui_on_hw_key(c, pr);
     }
     else if(!strncmp(b,"vol ",4)){ int v=atoi(b+4); if(v>=0&&v<=100){ g_vol=v; vol_apply(); vol_save(); } }
+    else if(!strcmp(b,"pwswallow")){ g_pwr_swallow_until = mono_ms() + 3000; logmsg("test: pwswallow armed"); }
     else if(!strcmp(b,"rtcsync")){ rtc_sync_if_needed(1); }
     else if(!strncmp(b,"clipsim ",8)){ rec_debug_clip(atoi(b+8)); logmsg("test: clipsim %d", atoi(b+8)); }
     else if(!strncmp(b,"ff ",3)){                         /* ff 1 = 开始快进，ff 0 = 停止 */
@@ -1797,10 +1804,7 @@ static void show_power_dialog(void){
     lv_obj_add_event_cb(ok,power_ok_cb,LV_EVENT_CLICKED,NULL);
 }
 
-static int64_t g_pwr_down = 0;
-static int g_pwr_woke = 0;   /* this press only wakes, no toggle on release */
-static int g_pwr_fired = 0;  /* long-press already triggered (fired while still held) */
-static lv_timer_t *g_pwr_timer = NULL;
+static lv_timer_t *g_pwr_timer = NULL;   /* g_pwr_down/fired/woke 在前面已声明 */
 static void pwr_hold_cb(lv_timer_t *t){
     (void)t;
     g_pwr_timer = NULL;
@@ -1835,6 +1839,16 @@ static void rec_hold_cb(lv_timer_t *t){
 void ui_on_hw_key(int code, int pressed){
     if(pressed) g_last_key_code = code;
     if(code==7){
+        if(g_pwr_swallow_until && mono_ms() < g_pwr_swallow_until){
+            if(!pressed){                       /* 松手即结束这次唤醒按键 */
+                g_pwr_swallow_until = 0;
+                logmsg("power: wake key swallowed (press+release)");
+            }
+            return;
+        }
+        if(g_pwr_swallow_until && mono_ms() >= g_pwr_swallow_until){
+            g_pwr_swallow_until = 0;            /* 超时：说明没有后续投递，恢复处理 */
+        }
         if(mono_ms() < g_ignore_pwr_until) return;   /* 刚唤醒：忽略这次投递 */
         if(pressed){
             if(!g_screen_on){
@@ -1854,10 +1868,15 @@ void ui_on_hw_key(int code, int pressed){
             if(g_pwr_woke){ g_pwr_woke = 0; return; }
             if(g_pwr_fired){ g_pwr_fired = 0; g_pwr_down = 0; return; }  /* 弹层已出，松手不再处理 */
             if(g_pwr_down){
+                int held = (int)(mono_ms() - g_pwr_down);
                 g_pwr_down = 0;
+                if(held < 80){                           /* 真正的抖动/毛刺（正常短按 >100 ms） */
+                    logmsg("power: ignored %d ms blip", held);
+                    return;
+                }
                 screen_set(0);                          /* 短按主动灭屏（录音中也允许） */
                 g_off_at = mono_ms();                   /* 计入休眠倒计时 */
-                logmsg("power: screen off (manual)");
+                logmsg("power: screen off (manual, held %d ms)", held);
             }
         }
         return;
