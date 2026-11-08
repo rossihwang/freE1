@@ -177,17 +177,13 @@ static void list_html(int fd, const char *root, const char *query){
         ".msg{padding:8px 12px;border-radius:8px;margin-bottom:12px;background:#16241c;color:#3cff7a}"
         "input[type=checkbox]{width:20px;height:20px}"
         ".pl{background:#1b3a2a;color:#3cff7a;border:0;border-radius:6px;padding:6px 10px;font:13px monospace;cursor:pointer}"
-        "#bar{position:fixed;left:0;right:0;bottom:0;background:#11151c;padding:8px 12px;display:none;"
-        "border-top:1px solid #222}"
+        "body{padding-bottom:104px}"
+        "#bar{position:fixed;left:0;right:0;bottom:0;background:#11151c;padding:10px 14px;"
+        "border-top:1px solid #2a2f38;display:flex;gap:12px;align-items:center;flex-wrap:wrap}"
         "#bar b{color:#3cff7a;font-weight:normal}"
-        "</style></head><body><h3>freE1 recordings</h3>"
-        "<div id=bar><span id=now>—</span> <audio id=pl controls preload=none style=\"width:min(560px,70vw);vertical-align:middle\"></audio></div>"
-        "<script>"
-        "function prev(n){const a=document.getElementById('pl');const b=document.getElementById('bar');"
-        "a.src='/'+encodeURIComponent(n);b.style.display='block';"
-        "document.getElementById('now').textContent=n;"
-        "a.play().catch(()=>{});return false;}"
-        "</script>");
+        "#bar .name{color:#8a8f98;max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}"
+        "button:disabled{opacity:.35;cursor:default}"
+        "</style></head><body><h3>freE1 recordings</h3>");
 
     if(del || fail){
         off += snprintf(body+off,65536-off,"<div class=msg>已删除 %d 个文件%s</div>",
@@ -195,7 +191,7 @@ static void list_html(int fd, const char *root, const char *query){
     }
 
     off += snprintf(body+off,65536-off,
-        "<form method=POST action=/delete onsubmit=\"return confirm('删除选中的文件？不可恢复')\">"
+        "<form id=dl method=POST action=/delete onsubmit=\"return confirm('删除选中的文件？不可恢复')\">"
         "<table><tr>"
         "<th><input type=checkbox id=all onclick=\"for(const c of document.querySelectorAll('input.cb'))c.checked=this.checked\"></th>"
         "<th>文件</th><th class=sz>时长</th><th class=sz>大小</th><th class=sz>标记</th><th class=sz>预览</th></tr>"
@@ -247,11 +243,33 @@ static void list_html(int fd, const char *root, const char *query){
         }
     }
     off += snprintf(body+off,65536-off,
-        "</table><p><button class=del type=submit>删除选中</button></p></form>"
+        "</table></form>"
         "<p class=sz>只列出并可删除本目录下的 .wav；删除会连同 .marks 一起删。"
         "HTTP 服务没有认证，请在可信网络内使用。</p>"
         "<p class=sz>预览用浏览器自带播放器：16-bit WAV 各浏览器都能放；24-bit WAV 在 Chrome/Edge/Firefox 可放，"
-        "iOS/Safari 可能不支持（可以在设备上把格式切成 48k/16bit 后重录，或先下载再听）。</p></body></html>");
+        "iOS/Safari 可能不支持（可以在设备上把格式切成 48k/16bit 后重录，或先下载再听）。</p>"
+        /* 常驻底部操作条：删除按钮不用滚到列表末尾也点得到 */
+        "<div id=bar>"
+        "<span>已选 <b id=cnt>0</b></span>"
+        "<button class=del id=dbtn type=submit form=dl disabled>删除选中</button>"
+        "<span class=name id=now>&#8212;</span>"
+        "<audio id=pl controls preload=none style=\"width:min(520px,58vw)\"></audio>"
+        "</div>"
+        "<script>"
+        "function upd(){const n=document.querySelectorAll('input.cb:checked').length;"
+        "document.getElementById('cnt').textContent=n;"
+        "document.getElementById('dbtn').disabled=(n===0);"
+        "const a=document.getElementById('all');"
+        "a.checked=(n>0&&n===document.querySelectorAll('input.cb').length);"
+        "a.indeterminate=(n>0&&!a.checked);}"
+        "function prev(n){const a=document.getElementById('pl');"
+        "a.src='/'+encodeURIComponent(n);"
+        "document.getElementById('now').textContent=n;"
+        "a.play().catch(()=>{});return false;}"
+        "for(const c of document.querySelectorAll('input.cb'))c.addEventListener('change',upd);"
+        "document.getElementById('all').addEventListener('change',upd);"
+        "upd();"
+        "</script></body></html>");
     int n=snprintf(head,sizeof head,
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %zu\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n", off);
