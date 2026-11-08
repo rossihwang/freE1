@@ -5,6 +5,7 @@
 
 仓库内的文档：
 
+- [`docs/INSTALL.md`](docs/INSTALL.md) — 在 Windows / Linux 上安装与卸载（只需 adb 和两个文件）
 - [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) — 各项测试的结果与复现方法
 - [`docs/MIC_ARRAY_GEOMETRY.md`](docs/MIC_ARRAY_GEOMETRY.md) — 麦克风阵列几何实测（64 × 25 mm）
 - [`docs/MARKS.md`](docs/MARKS.md) — 录音标记文件格式与导出到 DAW
