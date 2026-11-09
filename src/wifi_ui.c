@@ -38,7 +38,12 @@ static lv_obj_t *panel(lv_obj_t *p,int x,int y,int w,int h,int r,uint32_t bg){
     return o;
 }
 
+static int g_demo = 0;                    /* 1 = 截图演示模式（固定假数据，不碰真实网络） */
 static void refresh_status(void){
+    if(g_demo){
+        if(status_lbl) lv_label_set_text(status_lbl, "Home-Network  |  192.168.1.100");
+        return;
+    }
     wifi_state st; wifi_status(&st);
     char b[128];
     if(!st.available) snprintf(b,sizeof b,"no wpa_cli");
@@ -47,8 +52,31 @@ static void refresh_status(void){
     if(status_lbl) lv_label_set_text(status_lbl,b);
 }
 
+/* 截图/演示用：填一份固定的模拟热点列表，避免把真实 SSID 带进文档 */
+void wifi_ui_demo_aps(void){
+    static const struct { const char *ssid; int sig; int sec; int cur; } d[] = {
+        {"Home-Network", -42, 1, 1},
+        {"Office-5G",    -55, 1, 0},
+        {"Studio-WiFi",  -63, 0, 0},
+        {"Guest",        -71, 1, 0},
+        {"Cafe",         -78, 0, 0},
+    };
+    g_demo = 1;
+    g_naps = (int)(sizeof d / sizeof d[0]);
+    for(int i = 0; i < g_naps; i++){
+        snprintf(g_aps[i].ssid, sizeof g_aps[i].ssid, "%s", d[i].ssid);
+        g_aps[i].signal = d[i].sig;
+        g_aps[i].secure = d[i].sec;
+        g_aps[i].current = d[i].cur;
+    }
+    g_scan_done = 1;
+    refresh_status();
+    logmsg("wifi: demo list (%d APs)", g_naps);
+}
+
 static void *scan_thread(void *a){
     (void)a;
+    if(g_demo){ g_scan_done = 1; return NULL; }
     logmsg("scan_thread: avail=%d", wifi_available());
     g_naps = wifi_scan(g_aps, 16);
     logmsg("scan_thread: got %d", g_naps);

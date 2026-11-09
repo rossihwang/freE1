@@ -123,7 +123,7 @@ static int tap_ok(void){ return !hal_input_last_drag() && mono_ms() > g_ignore_t
 static void tap_guard(void){ g_ignore_tap_until = mono_ms() + 400; }
 static void reset_cb(lv_event_t *e){ (void)e; if(!tap_ok()) return; ui_activity(); meters_reset(); rec_clear_clip(); }
 
-static lv_obj_t *chart, *ser1, *ser2;
+static lv_obj_t *chart, *ser1;
 static lv_obj_t *rec_btn, *rec_lbl;
 static int recording = 0, page_idx = 0, input_mode = 0; /* 0=TOP 1=OMNI */
 static uint32_t rec_sec = 0;
@@ -528,7 +528,6 @@ static void set_rec_ui(int on){
         }
         if(chart){
             lv_chart_set_all_value(chart, ser1, 0);
-            lv_chart_set_all_value(chart, ser2, 0);
             lv_chart_refresh(chart);
             lv_obj_add_flag(chart, LV_OBJ_FLAG_HIDDEN);   /* 待机不留一条平线 */
         }
@@ -871,7 +870,6 @@ static void build_record_page(lv_obj_t *p){
     lv_chart_set_range(chart,LV_CHART_AXIS_PRIMARY_Y,-64,0);
     lv_chart_set_update_mode(chart,LV_CHART_UPDATE_MODE_SHIFT);
     ser1=lv_chart_add_series(chart,lv_color_hex(C_GREEN),LV_CHART_AXIS_PRIMARY_Y);
-    ser2=lv_chart_add_series(chart,lv_color_hex(0x1F8F4A),LV_CHART_AXIS_PRIMARY_Y);
 
     dbfs_lbl = mk_label(p,"-- dBFS",&lv_font_montserrat_14,C_DIM);
     lv_obj_set_pos(dbfs_lbl,10,250);
@@ -1225,6 +1223,7 @@ static void toggle_record(void);
 static void do_suspend(void);
 
 void ui_on_hw_key(int code, int pressed);
+void wifi_ui_demo_aps(void);
 static void poll_cmd(void){
     FILE *f=fopen("/mnt/sdcard/freE1/.cmd","rb");
     if(!f) return;
@@ -1232,6 +1231,9 @@ static void poll_cmd(void){
     while(n>0 && (b[n-1]=='\n' || b[n-1]=='\r' || b[n-1]==' ')) b[--n]=0;
     remove("/mnt/sdcard/freE1/.cmd");
     if(!strncmp(b,"page ",5)){ int n=atoi(b+5); if(n>=NPAGES) ui_open_wifi(); else show_page(n); }
+    else if(!strcmp(b,"wifiui")) ui_open_wifi();
+    else if(!strcmp(b,"wifidemo")){ wifi_ui_demo_aps(); }
+    else if(!strcmp(b,"wifirefresh")){ if(g_depth>0) wifi_page_tick(); }
     else if(!strncmp(b,"scan",4))  wifi_ui_trigger_scan();
     else if(!strncmp(b,"home",4)){ while(g_depth>0) ui_pop_page(); show_page(0); }
     else if(!strncmp(b,"pwd ",4))   wifi_ui_demo_open(b+4);
@@ -1522,10 +1524,12 @@ static void ui_tick(lv_timer_t *t){
         lv_label_set_text(timer_lbl,buf);
         char b2[24]; snprintf(b2,sizeof b2,"%d dBFS", st->db_dbfs);
         lv_label_set_text(dbfs_lbl,b2);
-        double tt2=(double)(lv_tick_get())/1000.0;
-        if(st->db_dbfs>-70 && !g_paused){
-            lv_chart_set_next_value(chart,ser1,st->db_dbfs);
-            lv_chart_set_next_value(chart,ser2,st->db_dbfs-6-3*sin(tt2*3.1));
+        if(!g_paused){
+            /* 静音也要继续推点（压到量程下沿），不然曲线停在旧位置看起来像卡住 */
+            int v = st->db_dbfs;
+            if(v < -63) v = -63;
+            if(v > 0)   v = 0;
+            lv_chart_set_next_value(chart, ser1, v);
         }
         return;
     }
@@ -1547,8 +1551,7 @@ static void ui_tick(lv_timer_t *t){
     int db = (int)(-60.0 + 42.0*base);
     char b2[24]; snprintf(b2,sizeof b2,"%d dBFS",db);
     lv_label_set_text(dbfs_lbl,b2);
-    lv_chart_set_next_value(chart,ser1,-60+38*base);
-    lv_chart_set_next_value(chart,ser2,-60+30*base*(0.6+0.4*sin(tt*3.1)));
+    lv_chart_set_next_value(chart,ser1,(int)(-60+38*base));
 }
 
 /* ---------------- headless PNG ---------------- */
