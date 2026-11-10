@@ -158,9 +158,24 @@ OMNI 模式下 L/R 是同一批声源的两组麦，实测逐带相关：
 改到 3 之后原厂 App **启动即崩溃**，`init` 每 1.6 s 重新拉起一次（`e1.log` 里连续多个 PID
 都在 `noisereducelevel: 3` 初始化后立刻结束），约 5 分钟后整机被看门狗重启。恢复过程见下。
 
-原因：**这台设备的固件里根本没有 NNSE 模型目录**——`/etc/sogou/front-config/nnse/` 不存在
-（只有 `agc/`、`model-1/`、`model-2/`）。10.5 MB 的 `nnse.conf.model.bin` 只存在于旧版备份里，
-当前 1.2.3 固件没有随带，App 又按“存在即加载”去初始化，于是崩溃循环。
+**手动复现拿到了确定的退出原因**（把档位设成 3，绕开 init 直接运行原厂 App）：
+
+```
+last log: [E1.RecordConfig] read current record mode: 1
+Segmentation fault
+EXIT=139
+```
+
+即 **SIGSEGV（信号 11）**，死在录音引擎初始化的最后一步，没有任何错误输出。
+
+根因：**这台设备的固件里没有 NNSE 资产**——`/etc/sogou/front-config/nnse/` 不存在
+（只有 `agc/`、`model-1/`、`model-2/`），`find / -iname "*nnse*"` 只剩三个 `.so`，
+10.5 MB 的 `nnse.conf.model.bin` 只存在于旧版备份里。SDK 的加载函数是
+`load_nnse_conf` / `load nnse conf fail`，App 没检查失败返回值就继续用，解引用空指针 → 段错误。
+
+为什么表现为“不停重启”：`inittab` 里是 `::respawn:/usr/bin/SogouLunchProbe.sh`，
+App 一崩就被 init 拉起（实测每 1.6 s 一个新 PID），持续几分钟后整机被看门狗重启；
+期间 WiFi 归 App 管，一直起不来，所以 SSH 不可达（USB adb 不受影响，靠它恢复）。
 
 结论：**三级降噪在这个固件版本上不可用**，不是参数问题，是资产缺失。
 
