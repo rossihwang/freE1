@@ -7,6 +7,7 @@
 
 - [`docs/MANUAL.md`](docs/MANUAL.md) — 用户手册：所有功能 + 界面截图
 - [`docs/AUDIO_COMPARISON.md`](docs/AUDIO_COMPARISON.md) — 与原厂 App 的录音质量实测对比
+- [`docs/NR_TESTING.md`](docs/NR_TESTING.md) — 降噪/录音质量的测法：测试音设计、指标定义、复现步骤
 - [`docs/INSTALL.md`](docs/INSTALL.md) — 在 Windows / Linux 上安装与卸载（只需 adb 和两个文件）
 - [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md) — 各项测试的结果与复现方法
 - [`docs/MIC_ARRAY_GEOMETRY.md`](docs/MIC_ARRAY_GEOMETRY.md) — 麦克风阵列几何实测（64 × 25 mm）
